@@ -1,1 +1,2 @@
 climatologies/h2o_ecmwf.dat filter=lfs diff=lfs merge=lfs -text
+test_data/W_XX-EUMETSAT-Darmstadt,IMG+SAT,MTI1+FCI-1C-RRAD-HRFI-FD--x-x---x_C_EUMT_20260823125325_IDPFI_OPE_20260823125007_20260823125935_N__O_0078_0000.zip filter=lfs diff=lfs merge=lfs -text
