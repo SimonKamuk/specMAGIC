@@ -24,3 +24,6 @@ gif_frames/
 *.gif
 *.png
 
+
+# Do not include large downloaded land albedo map files
+climatologies/modis-brdf/*.nc
