@@ -39,9 +39,10 @@ This code is assuming the presence of input satellite data. Currently, only Mete
 ## To run the code in demo mode
 
 ```bash
+git clone [url]
 uv sync
 ```
-will set up the python environment and necessary plugins. 
+will set up the python environment and necessary plugins. Note that the cloning step can take a minute or two, as the test data available for the demo are large.
 
 The driver script, which pre-processes the MTG data, calls the SpecMAGIC code, and does some small postprocessing, is called `mtg.sh`. By default, it runs in demo mode, using the data that comes pre-packaged in the `test_data` directory. These test data originate from EUMETSAT Meteosat products published in 2026. The single `.zip` file corresponds to a single level 1c satellite image taken by MTG/FCI on the 23rd August 2026 at 13:00 UTC. These exist under a CC-BY-4.0 free license; for details, please [the EUMETSAT website.](https://user.eumetsat.int/catalogue/EO:EUM:DAT:0989)
 
@@ -66,6 +67,7 @@ Figures will appear in the `/figs` directory. By default, plots of GHI, DNI, CAL
 
 As above, 
 ```bash
+git clone [url]
 uv sync
 ```
 will set up the python environment and necessary plugins. 

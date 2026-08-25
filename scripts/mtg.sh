@@ -214,7 +214,7 @@ export OMP_NUM_THREADS=8
 echo "Calling magic..."
 
 ## Run C++ driver
-"$ROOT/build/magic" "$ROOT/" $CHANNEL $TIMER 
+"$ROOT/build/magic" "$ROOT/" $CHANNEL $TIMER
 
 
 ## Post-process plots
