@@ -275,7 +275,7 @@ namespace ModisBrdf {
 
         }
 
-        int localIndex(int local_lon, int local_lat) {
+        int localIndex(int local_lon, int local_lat) const {
 
             return local_lon * nlat + local_lat;
 
@@ -324,7 +324,7 @@ namespace ModisBrdf {
             return true;
         }
 
-        BrdfTriplet interpolate(Source source, MAGIC_REAL lat, MAGIC_REAL lon) {
+        BrdfTriplet interpolate(Source source, MAGIC_REAL lat, MAGIC_REAL lon) const {
 
             int s = static_cast<int>(source);
 
