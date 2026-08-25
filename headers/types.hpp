@@ -25,3 +25,6 @@ enum class PixelState { Night = 0, Day = 1, Invalid = 99 };
 
 // To distinguish between GHI and DNI
 enum class IrradianceMode { Beam, Global };
+
+// The source of the albedo data being used
+enum class AlbedoType { LANDMAP, MODIS };

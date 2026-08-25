@@ -167,8 +167,11 @@ namespace ModisBrdf {
 
         ModisBrdfAlbedo() = default;
 
-        void load(Config c, int month) {
-            enabled = c.use_modis_brdf_albedo == 1;
+        void load(Config c, int month, AlbedoType albedo_source) {
+
+            bool enabled = albedo_source == AlbedoType::MODIS;
+
+            // If we are not using the modis albedo, then this object is simply empty
 
             if (!enabled) {
                 std::printf("MODIS BRDF albedo disabled; using land-use albedo.\n");
@@ -194,14 +197,19 @@ namespace ModisBrdf {
                     std::printf("WARNING: Could not read MODIS BRDF source %s from %s\n",
                         sourceName(source), filepath.c_str());
                 }
+
             }
 
             loaded = true;
+            this->enabled = enabled;
+
+            
         }
 
         MAGIC_REAL getAlbedo(Source source, Area a, MAGIC_REAL cos_sza) const {
             int s = static_cast<int>(source);
             if (!enabled || !loaded || !source_loaded[s]) return (MAGIC_REAL)-1;
+            
 
             BrdfTriplet brdf = interpolate(source, a.degrees_lat, a.degrees_lon);
             if (!brdf.valid) return (MAGIC_REAL)-1;

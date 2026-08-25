@@ -1,6 +1,26 @@
 #pragma once 
 #include <string>
+#include "types.hpp"
 
+
+// To choose the type of albedo we want data from
+inline AlbedoType parseAlbedoSource(){
+
+    const char* env = std::getenv("ALBEDO");
+
+    if (!env || std::string(env) == "LANDMAP") {
+        return AlbedoType::LANDMAP;
+    }
+
+    if (std::string(env) == "MODIS") {
+        return AlbedoType::MODIS;
+    }
+
+    throw std::runtime_error(
+        "Unknown ALBEDO: " + std::string(env)
+    );
+
+}
 
 struct Config {
 
@@ -17,7 +37,6 @@ struct Config {
     int latdim{}, londim{};
     float latbegin{}, lonbegin{}, dxy{}, deltalon{}, iconres{};
     int iconflag{};
-    int use_modis_brdf_albedo{0};
 
  
 };

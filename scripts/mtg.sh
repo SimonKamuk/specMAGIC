@@ -14,6 +14,7 @@ HI_PRECISION=ON
 CHANNEL="vis_06"
 DEMO="${DEMO:-1}"              # 1 = use local demo data, 0 = user supplies MTG_RAW_DIR
 MTG_RAW_DIR="${MTG_RAW_DIR:-}"
+ALBEDO="${ALBEDO:-LANDMAP}"
 
 valid_channels=(vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22)
 
@@ -23,6 +24,7 @@ usage() {
     echo "Options:"
     echo "  --ref-time TIME       Reference time (not available in demo mode)"
     echo "  --channel CHANNEL     Satellite channel (default: $CHANNEL). Options: vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22 "
+    echo "  --albedo ALBEDO      Albedo type (default: $ALBEDO). Options: LANDMAP MODIS" 
     echo "  --demo                Use demo data (default)"
     echo "  --no-demo             Use user-specified MTG_RAW_DIR instead of demo data"
     echo "  --noclean             Keep existing outputs"
@@ -57,6 +59,11 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
 
+            shift 2
+            ;;
+
+        --albedo)
+            ALBEDO="$2"
             shift 2
             ;;
 
@@ -109,6 +116,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$ALBEDO" in
+    LANDMAP|MODIS)
+        ;;
+    *)
+        echo "Error: invalid albedo type '$ALBEDO'."
+        echo "Valid options are: LANDMAP, MODIS."
+        exit 1
+        ;;
+esac
+
 # Check for ref time 
 # In demo mode, the time is fixed, so the user should not pass a time
 if [[ "$DEMO" -eq 1 ]]; then
@@ -148,6 +165,8 @@ fi
 ymd=$(date +"%Y%m%d" --date="$REF_TIME")
 hh=$(date +"%H" --date="$REF_TIME")
 mm=$(date +"%M" --date="$REF_TIME")
+
+
 
 if [[ "$DEMO" -eq 1 ]]; then
 
@@ -208,7 +227,15 @@ if [[ "$REBUILD" == "1" ]]; then
     cd "$ROOT"
 fi
 
+if [[ "$ALBEDO" == "MODIS" ]]; then
+    echo "Downloading MODIS data..."
+    uv run python py_utils/download_MODIS_maps.py climatologies/modis-brdf
+fi
+
+
+
 export OMP_NUM_THREADS=8
+export ALBEDO=$ALBEDO
 echo "Calling magic..."
 
 ## Run C++ driver

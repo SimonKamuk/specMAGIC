@@ -86,26 +86,21 @@ Then call the code with a timestamp specified
 ./scripts/mtg.sh --ref-time "Yesterday 08:00"
 ```
 
-
 ## Configuring SpecMAGIC
 
 The SpecMAGIC config is found in `root/magic-config.asc`. Here also is a short overview of the available lookup tables and input data. Alterations here are at the user's own risk.
 
+## Multiple timesteps and animating
 
+The scripts `scripts/multi.sh` and `scripts/animate.sh` can be used to run the code for multiple satellite images and create an animation of the result. The user must provide their own MTG 
+data for this functionality, as the testing data includes only one image.
 
 ## MODIS BRDF albedo maps
 
-This section explains how to upgrade from coarse land-use maps to MODIS hi-res land albedo maps for the clearsky calculation.
+By default, specMAGIC uses some older landmaps whose resolution is coarse. It is also possible to use MODIS hi-res land albedo maps for the clearsky calculation. 
+These are too large to be stored here, but the user can toggle whether to download them using the `--albedo` keyword.
 
-The MODIS BRDF NetCDF files are large and are not stored in Git.
+```./scripts/mtg.sh --albedo MODIS
 
-Download them with:
-```
-bash uv run python py_utils/download_MODIS_maps.py climatologies/modis-brdf
-``` 
-
-If you have access to a pre-downloaded copy of the MODIS BRDF files, you can instead create a local symlink from the project root pointing to that location:
-
-```
-ln -s /path/to/shared/modis climatologies/modis-brdf
-```
+The total file size is ~ 6 GB. The download may take some minutes.
+A destination check is implemented, so that if the files are found to already exist in the correct directory, they will not be overwritten. 

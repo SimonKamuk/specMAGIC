@@ -4,6 +4,7 @@
 #include <math.h>
 #include <cassert>
 #include <string>
+#include <cstdlib>
 #include "../headers/types.hpp"
 #include "../headers/read.hpp"
 #include "../headers/radiation.hpp"
@@ -48,9 +49,22 @@ int main(int argc, char* argv[]) {
     // Get setup from the configuration file
     Config c = loadConfig("magic-config.asc", home);
 
+    // Read in the actual satellite image and its metadata
+    Image img;
+    img.initfromFile(c.path+c.cloud_list);
+    img.readImage(channel);
+
     // ------ Read lookup tables ---------
+    AlbedoType albedo_source = parseAlbedoSource();
+
     GroundAlbedo alb(c.num_bands);
     alb.fromFile(c);
+
+    ModisBrdf::ModisBrdfAlbedo modis;
+    // Empty if MODIS is not enabled
+    if (albedo_source == AlbedoType::MODIS) {
+        modis.load(c, img.timestamp.month, albedo_source);
+    }
 
     // For the cloudy sky correction
     Correction::Spectral lc(KATO_MAX + 1);
@@ -66,17 +80,9 @@ int main(int argc, char* argv[]) {
     monster.fromFile(c.path+c.clut_spec);
     // ------ Done reading climatologies and lookup tables ---------
 
-    // Read in the actual satellite image and its metadata
-    Image img;
-    img.initfromFile(c.path+c.cloud_list);
-    img.readImage(channel);
 
     // Read climatologies
     Climate climatologies = Climate(c, img.timestamp.month);
-
-    // Read MODIS BRDF albedo, if enabled
-    ModisBrdf::ModisBrdfAlbedo modis;
-    modis.load(c, img.timestamp.month);
 
     // Global coords across ENTIRE image
     Geography geo = Geography(c.latdim, c.londim);
@@ -189,7 +195,7 @@ int main(int argc, char* argv[]) {
                     SunGeometry::correctZenithAngle(sun);
     
                     // Calculate the CAL for this pixel
-                    MAGIC_REAL cal = effectiveCloudAlbedo(img, sun, climatologies, alb,
+                    MAGIC_REAL cal = effectiveCloudAlbedo(img, sun, climatologies, albedo_source, alb,
                         modis, a, clim, line, col);
                     
                     // Put the CAL into the radiation matrix
@@ -203,17 +209,8 @@ int main(int argc, char* argv[]) {
 
                         // Calculate surface albedo at this point
                         // Prefer MODIS BRDF albedo if available, otherwise use old land-use albedo.
-                        clim.surface_albedo = static_cast<MAGIC_EXACT>(
-                            Reflectivity::getBestKatoSurfaceAlbedo(
-                                climatologies,
-                                a,
-                                alb,
-                                modis,
-                                band,
-                                sun.cos_sza,
-                                clim.albedo_correction
-                            )
-                        );
+                        clim.surface_albedo = static_cast<MAGIC_EXACT>(Reflectivity::getBestKatoSurfaceAlbedo(
+                            climatologies, a, albedo_source, alb, modis, band, sun.cos_sza, clim.albedo_correction));
 
                         // Calculate the clear-sky ghi at this pixel
                         sc.GHI_spectral[band] = magic(monster, water, ozone, IrradianceMode::Global, band, 
