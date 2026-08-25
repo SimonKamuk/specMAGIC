@@ -85,34 +85,25 @@ namespace ModisBrdf {
         return Source::Shortwave;
     }
 
-    inline MAGIC_REAL blackSkyAlbedo(
-        MAGIC_REAL fiso,
-        MAGIC_REAL fvol,
-        MAGIC_REAL fgeo,
-        MAGIC_REAL solar_zenith_angle
-    ) {
+    inline MAGIC_REAL blackSkyAlbedo(MAGIC_REAL fiso, MAGIC_REAL fvol,
+        MAGIC_REAL fgeo, MAGIC_REAL solar_zenith_angle) {
+
         MAGIC_REAL theta = solar_zenith_angle;
         MAGIC_REAL theta2 = theta * theta;
         MAGIC_REAL theta3 = theta2 * theta;
 
-        MAGIC_REAL vol_kernel =
-            (MAGIC_REAL)-0.007574
+        MAGIC_REAL vol_kernel = (MAGIC_REAL)-0.007574
             - (MAGIC_REAL)0.070987 * theta2
             + (MAGIC_REAL)0.307588 * theta3;
 
-        MAGIC_REAL geo_kernel =
-            (MAGIC_REAL)-1.284909
+        MAGIC_REAL geo_kernel = (MAGIC_REAL)-1.284909
             - (MAGIC_REAL)0.166314 * theta2
             + (MAGIC_REAL)0.041840 * theta3;
 
         return fiso + fvol * vol_kernel + fgeo * geo_kernel;
     }
 
-    inline MAGIC_REAL whiteSkyAlbedo(
-        MAGIC_REAL fiso,
-        MAGIC_REAL fvol,
-        MAGIC_REAL fgeo
-    ) {
+    inline MAGIC_REAL whiteSkyAlbedo(MAGIC_REAL fiso, MAGIC_REAL fvol, MAGIC_REAL fgeo ) {
         return fiso
             + (MAGIC_REAL)0.189184 * fvol
             - (MAGIC_REAL)1.377622 * fgeo;
@@ -121,27 +112,21 @@ namespace ModisBrdf {
     inline MAGIC_REAL diffuseFraction(MAGIC_REAL cos_sza) {
         if (cos_sza <= (MAGIC_REAL)0) return (MAGIC_REAL)1;
 
-        MAGIC_REAL direct =
-            (MAGIC_REAL)1098.0
-            * std::exp((MAGIC_REAL)-0.057 / cos_sza)
-            * cos_sza;
+        MAGIC_REAL direct = (MAGIC_REAL)1098.0 * std::exp((MAGIC_REAL)-0.057 / cos_sza) * cos_sza;
 
-        MAGIC_REAL diffuse =
-            (MAGIC_REAL)94.23 * std::sqrt(cos_sza);
+        MAGIC_REAL diffuse = (MAGIC_REAL)94.23 * std::sqrt(cos_sza);
 
         MAGIC_REAL denom = direct + diffuse;
+        
         if (denom <= (MAGIC_REAL)0) return (MAGIC_REAL)1;
 
         MAGIC_REAL fraction = (MAGIC_REAL)2.0 * diffuse / denom;
+
         return std::min((MAGIC_REAL)1.0, std::max((MAGIC_REAL)0.0, fraction));
     }
 
-    inline MAGIC_REAL surfaceAlbedo(
-        MAGIC_REAL fiso,
-        MAGIC_REAL fvol,
-        MAGIC_REAL fgeo,
-        MAGIC_REAL cos_sza
-    ) {
+    inline MAGIC_REAL surfaceAlbedo(MAGIC_REAL fiso, MAGIC_REAL fvol, MAGIC_REAL fgeo, MAGIC_REAL cos_sza) {
+
         MAGIC_REAL theta = std::acos(std::min((MAGIC_REAL)1, std::max((MAGIC_REAL)0, cos_sza)));
 
         MAGIC_REAL black = blackSkyAlbedo(fiso, fvol, fgeo, theta);
@@ -198,7 +183,7 @@ namespace ModisBrdf {
 
             defineRegion(c);
 
-            for (int s = 0; s < SourceCount; ++s) {
+            for (int s = 0; s < SourceCount; s++) {
                 Source source = static_cast<Source>(s);
                 std::string filepath = c.path + c.modis_brdf_dir + filenameFor(source);
 
@@ -261,32 +246,43 @@ namespace ModisBrdf {
         }
 
         static int lonIndex(MAGIC_REAL lon) {
+
             MAGIC_REAL wrapped = lon;
             while (wrapped < (MAGIC_REAL)-180) wrapped += (MAGIC_REAL)360;
             while (wrapped > (MAGIC_REAL)180) wrapped -= (MAGIC_REAL)360;
 
             int index = static_cast<int>(std::lround((wrapped - (MAGIC_REAL)-179.975) / (MAGIC_REAL)0.05));
             return std::max(0, std::min(FullLon - 1, index));
+
         }
 
         static int latIndex(MAGIC_REAL lat) {
+
             int index = static_cast<int>(std::lround(((MAGIC_REAL)89.975 - lat) / (MAGIC_REAL)0.05));
             return std::max(0, std::min(FullLat - 1, index));
         }
 
+
         static MAGIC_REAL lonAt(int index) {
+
             return (MAGIC_REAL)-179.975 + (MAGIC_REAL)0.05 * index;
+
         }
 
         static MAGIC_REAL latAt(int index) {
+
             return (MAGIC_REAL)89.975 - (MAGIC_REAL)0.05 * index;
+
         }
 
-        int localIndex(int local_lon, int local_lat) const {
+        int localIndex(int local_lon, int local_lat) {
+
             return local_lon * nlat + local_lat;
+
         }
 
         bool readSource(const std::string& filepath, Source source, int month) {
+
             int ncid = 0;
             int retval = nc_open(filepath.c_str(), NC_NOWRITE, &ncid);
             if (retval != NC_NOERR) return false;
@@ -300,6 +296,7 @@ namespace ModisBrdf {
         }
 
         bool readVariable(int ncid, const char* varname, std::vector<MAGIC_REAL>& out, int month) {
+
             int varid = 0;
             int retval = nc_inq_varid(ncid, varname, &varid);
             if (retval != NC_NOERR) return false;
@@ -312,11 +309,7 @@ namespace ModisBrdf {
                 static_cast<size_t>(lat_start)
             };
 
-            size_t count[3] = {
-                1,
-                static_cast<size_t>(nlon),
-                static_cast<size_t>(nlat)
-            };
+            size_t count[3] = {1, static_cast<size_t>(nlon), static_cast<size_t>(nlat)};
 
             retval = nc_get_vara_short(ncid, varid, start, count, raw.data());
             if (retval != NC_NOERR) return false;
@@ -331,7 +324,8 @@ namespace ModisBrdf {
             return true;
         }
 
-        BrdfTriplet interpolate(Source source, MAGIC_REAL lat, MAGIC_REAL lon) const {
+        BrdfTriplet interpolate(Source source, MAGIC_REAL lat, MAGIC_REAL lon) {
+
             int s = static_cast<int>(source);
 
             int global_lon = lonIndex(lon);
@@ -340,9 +334,7 @@ namespace ModisBrdf {
             int local_lon = global_lon - lon_start;
             int local_lat = global_lat - lat_start;
 
-            if (local_lon < 0 || local_lon >= nlon || local_lat < 0 || local_lat >= nlat) {
-                return {};
-            }
+            if (local_lon < 0 || local_lon >= nlon || local_lat < 0 || local_lat >= nlat) return {};
 
             int idx = localIndex(local_lon, local_lat);
 
