@@ -64,32 +64,35 @@ def flatten_product_directory(product_dir, out_dir):
 
     return moved
 
+def main():
+    # Command-line argument
+    data_dir = os.path.abspath(sys.argv[1])
 
-# Command-line argument
-data_dir = os.path.abspath(sys.argv[1])
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f"Demo data directory not found: {data_dir}")
 
-if not os.path.isdir(data_dir):
-    raise FileNotFoundError(f"Demo data directory not found: {data_dir}")
+    # Find ZIP files
+    zip_files = [
+        f for f in os.listdir(data_dir)
+        if f.endswith(".zip")
+    ]
 
-# Find ZIP files
-zip_files = [
-    f for f in os.listdir(data_dir)
-    if f.endswith(".zip")
-]
+    if len(zip_files) == 0:
+        raise FileNotFoundError(f"No ZIP file found in {data_dir}")
+    
+    if len(zip_files) > 1:
+        raise RuntimeError(
+            f"Expected exactly one ZIP file in {data_dir}, "
+            f"but found {len(zip_files)}"
+        )
 
-if len(zip_files) == 0:
-    raise FileNotFoundError(f"No ZIP file found in {data_dir}")
+    zip_path = os.path.join(data_dir, zip_files[0])
 
-if len(zip_files) > 1:
-    raise RuntimeError(
-        f"Expected exactly one ZIP file in {data_dir}, "
-        f"but found {len(zip_files)}"
-    )
+    # Extract the local ZIP
+    product_dir = extract_zip(zip_path)
 
-zip_path = os.path.join(data_dir, zip_files[0])
+    # Flatten the extracted product into the same directory
+    flatten_product_directory(product_dir, data_dir)
 
-# Extract the local ZIP
-product_dir = extract_zip(zip_path)
-
-# Flatten the extracted product into the same directory
-flatten_product_directory(product_dir, data_dir)
+if __name__ == "__main__": 
+    main()

@@ -149,8 +149,6 @@ ymd=$(date +"%Y%m%d" --date="$REF_TIME")
 hh=$(date +"%H" --date="$REF_TIME")
 mm=$(date +"%M" --date="$REF_TIME")
 
-
-
 if [[ "$DEMO" -eq 1 ]]; then
 
     echo "Extracting demo data..."
