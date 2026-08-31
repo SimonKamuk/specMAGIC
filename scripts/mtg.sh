@@ -6,13 +6,13 @@ ROOT="$PWD"
 
 ## Defaults
 REF_TIME="" # UTC time!
-NOCLEAN="${NOCLEAN:-0}"      # set to 1 to keep existing outputs
+NOCLEAN="${NOCLEAN:-1}"      # set to 1 to keep existing outputs
 REBUILD="${REBUILD:-1}"      # set to 0 to skip cmake rebuild
 VERBOSE="${VERBOSE:-1}"
 TIMER="${TIMER:-0}"          # whether or not to make output of timing the c code
 HI_PRECISION=ON
 CHANNEL="vis_06"
-DEMO="${DEMO:-1}"              # 1 = use local demo data, 0 = user supplies MTG_RAW_DIR
+DEMO="${DEMO:-0}"              # 1 = use local demo data, 0 = user supplies MTG_RAW_DIR
 MTG_RAW_DIR="${MTG_RAW_DIR:-}"
 ALBEDO="${ALBEDO:-LANDMAP}"
 
@@ -24,9 +24,10 @@ usage() {
     echo "Options:"
     echo "  --ref-time TIME       Reference time (not available in demo mode)"
     echo "  --channel CHANNEL     Satellite channel (default: $CHANNEL). Options: vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22 "
-    echo "  --albedo ALBEDO      Albedo type (default: $ALBEDO). Options: LANDMAP MODIS" 
+    echo "  --albedo ALBEDO       Albedo type (default: $ALBEDO). Options: LANDMAP MODIS" 
     echo "  --demo                Use demo data (default)"
     echo "  --no-demo             Use user-specified MTG_RAW_DIR instead of demo data"
+    echo "  --clean               Delete existing outputs before running"
     echo "  --noclean             Keep existing outputs"
     echo "  --no-rebuild          Skip magic rebuild"
     echo "  --timer               Enable timing output"
@@ -79,6 +80,11 @@ while [[ $# -gt 0 ]]; do
 
         --no-demo)
             DEMO=0
+            shift
+            ;;
+
+        --clean)
+            NOCLEAN=0
             shift
             ;;
 

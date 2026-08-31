@@ -9,6 +9,11 @@ Annette Hammer and Axel Kemper contributed during their time at the University o
 The 2012 version of SPECMAGIC is described in
 Mueller, R.; Behrendt, T.; Hammer, A.; Kemper, A. [A New Algorithm for the Satellite-Based Retrieval of Solar Surface Irradiance in Spectral Bands](https://doi.org/10.3390/rs4030622).
 
+## Requirements
+
+- A Linux installation 
+- CMake >= 3.16
+
 ## Preparing to run
 
 SpecMAGIC is using `uv` for package management. It can be installed with 
@@ -47,13 +52,13 @@ will set up the python environment and necessary plugins. Note that the cloning 
 The driver script, which pre-processes the MTG data, calls the SpecMAGIC code, and does some small postprocessing, is called `mtg.sh`. By default, it runs in demo mode, using the data that comes pre-packaged in the `test_data` directory. These test data originate from EUMETSAT Meteosat products published in 2026. The single `.zip` file corresponds to a single level 1c satellite image taken by MTG/FCI on the 23rd August 2026 at 13:00 UTC. These exist under a CC-BY-4.0 free license; for details, please [the EUMETSAT website.](https://user.eumetsat.int/catalogue/EO:EUM:DAT:0989)
 
 ```bash
-./scripts/mtg.sh
+./scripts/mtg.sh --demo
 ```
 
 The default MTG channel is `vis_06`, which is 640 nm. Other channels can be specified using `--channel`, e.g. 
 
 ```bash
-./scripts/mtg.sh --channel "nir_13"
+./scripts/mtg.sh --demo --channel "nir_13"
 ```
 
 To see a full list of input options, 
@@ -86,6 +91,15 @@ Then call the code with a timestamp specified
 ./scripts/mtg.sh --ref-time "Yesterday 08:00"
 ```
 
+The timestamp is in 24-hour hour time (so use "Yesterday 13:00" rather than "Yesterday 1pm"). Explicit calendar dates can all be passed. All of the below are accepted datetime formats. 
+```bash
+2026-08-31 08:00
+2026/08/31 08:00
+"Today 08:00" # assuming today is the 31st August
+```
+
+Remember that all times are in UTC, to match EUMETSAT satellite conventions. Passing `08:00` will search for data acquired at `08:00` as clocked by the satellite.
+
 ## Configuring SpecMAGIC
 
 The SpecMAGIC config is found in `root/magic-config.asc`. Here also is a short overview of the available lookup tables and input data. Alterations here are at the user's own risk.
@@ -100,7 +114,9 @@ data for this functionality, as the testing data includes only one image.
 By default, specMAGIC uses some older landmaps whose resolution is coarse. It is also possible to use MODIS hi-res land albedo maps for the clearsky calculation. 
 These are too large to be stored here, but the user can toggle whether to download them using the `--albedo` keyword.
 
-```./scripts/mtg.sh --albedo MODIS
+```
+./scripts/mtg.sh --albedo MODIS
+``` 
 
 The total file size is ~ 6 GB. The download may take some minutes.
 A destination check is implemented, so that if the files are found to already exist in the correct directory, they will not be overwritten. 
