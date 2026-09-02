@@ -13,18 +13,12 @@ Mueller, R.; Behrendt, T.; Hammer, A.; Kemper, A. [A New Algorithm for the Satel
 
 - A Linux installation 
 - CMake >= 3.16
-
-## Preparing to run
-
-SpecMAGIC is using `uv` for package management. It can be installed with 
-
+- C++ >= 17
+- A uv installation, for dependency management. [Please see the uv docs for more information.](https://docs.astral.sh/uv/)
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
-
-[Please see the uv docs for more information.](https://docs.astral.sh/uv/)
-
-This repository uses Git Large File Storage (Git LFS) to store the demo test data. Without it, the test data .zip will not be downloaded correctly and the demo will fail with a BadZipFile error. Install Git LFS for your platform:
+- A Git Large File System (LFS) installation. Without it, the test data `.zip` will not be downloaded correctly and the demo will return a `BadZipFile` error. Install Git LFS for your platform:
 
 ```bash
 sudo apt install git-lfs
@@ -45,11 +39,12 @@ This code is assuming the presence of input satellite data. Currently, only Mete
 
 ```bash
 git clone [url]
+cd specMAGIC
 uv sync
 ```
 will set up the python environment and necessary plugins. Note that the cloning step can take a minute or two, as the test data available for the demo are large.
 
-The driver script, which pre-processes the MTG data, calls the SpecMAGIC code, and does some small postprocessing, is called `mtg.sh`. By default, it runs in demo mode, using the data that comes pre-packaged in the `test_data` directory. These test data originate from EUMETSAT Meteosat products published in 2026. The single `.zip` file corresponds to a single level 1c satellite image taken by MTG/FCI on the 23rd August 2026 at 13:00 UTC. These exist under a CC-BY-4.0 free license; for details, please [the EUMETSAT website.](https://user.eumetsat.int/catalogue/EO:EUM:DAT:0989)
+The driver script, which pre-processes the MTG data, calls the SpecMAGIC code, and does some small postprocessing, is called `mtg.sh`. It can run in demo mode, using the data that comes pre-packaged in the `test_data` directory. These test data originate from EUMETSAT Meteosat products published in 2026. The single `.zip` file corresponds to a single level 1c satellite image taken by MTG/FCI on the 23rd August 2026 at 13:00 UTC. These exist under a CC-BY-4.0 free license; for details, please [the EUMETSAT website.](https://user.eumetsat.int/catalogue/EO:EUM:DAT:0989)
 
 ```bash
 ./scripts/mtg.sh --demo
@@ -95,7 +90,7 @@ The timestamp is in 24-hour hour time (so use "Yesterday 13:00" rather than "Yes
 ```bash
 2026-08-31 08:00
 2026/08/31 08:00
-"Today 08:00" # assuming today is the 31st August
+"Today 08:00"        # assuming today is the 31st August
 ```
 
 Remember that all times are in UTC, to match EUMETSAT satellite conventions. Passing `08:00` will search for data acquired at `08:00` as clocked by the satellite.
@@ -120,3 +115,12 @@ These are too large to be stored here, but the user can toggle whether to downlo
 
 The total file size is ~ 6 GB. The download may take some minutes.
 A destination check is implemented, so that if the files are found to already exist in the correct directory, they will not be overwritten. 
+
+## Further documentation
+
+There exist some notes on various aspects of the program, linked below.
+
+:sunny: [Physics](https://github.com/dmidk/specMAGIC/blob/main/docs/physics.md)
+:zap: [OpenMP for parallelism](https://github.com/dmidk/specMAGIC/blob/main/docs/omp.md)
+:key: [Input data](https://github.com/dmidk/specMAGIC/blob/main/docs/inputs.md)
+:artificial_satellite: [Meteosat Third Generation](https://github.com/dmidk/specMAGIC/blob/main/docs/mtg.md)
