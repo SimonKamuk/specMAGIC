@@ -101,7 +101,7 @@ while [[ $# -gt 0 ]]; do
             ;;
 
         --whole-domain)
-            EXTENT="0.0 -20.0 65.0 60.0 1.0"
+            EXTENT="0.0 -60.0 65.0 60.0 1.0"
             shift
             ;;
 

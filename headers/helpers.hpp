@@ -49,7 +49,7 @@ inline void printPixels(size_t day, size_t night, size_t invalid) {
     float perc2 = static_cast<float>(day) / (day + night + invalid);
     float perc3 = static_cast<float>(night) / (day + night + invalid);
 
-    if (perc1 * 100 > 6) concern = true;
+    if (perc1 * 100 > 15) concern = true;
 
     if (concern) printf("[WARNING]: Many invalid pixels. Results may not be sound. \n");
 
