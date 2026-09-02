@@ -15,6 +15,7 @@ CHANNEL="vis_06"
 DEMO="${DEMO:-0}"              # 1 = use local demo data, 0 = user supplies MTG_RAW_DIR
 MTG_RAW_DIR="${MTG_RAW_DIR:-}"
 ALBEDO="${ALBEDO:-LANDMAP}"
+EXTENT="40.0 -15.0 65.0 30.0 1.0"
 
 valid_channels=(vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22)
 
@@ -30,6 +31,7 @@ usage() {
     echo "  --clean               Delete existing outputs before running"
     echo "  --noclean             Keep existing outputs"
     echo "  --no-rebuild          Skip magic rebuild"
+    echo "  --whole-domain        Plot the whole domain, rather than the DK cutout"
     echo "  --timer               Enable timing output"
     echo "  --verbose             Enable verbose output"
     echo "  -h, --help            Show this help"
@@ -79,7 +81,7 @@ while [[ $# -gt 0 ]]; do
             ;;
 
         --no-demo)
-            DEMO=0
+            DEMO            WHOLE_DOMAIN=1=0
             shift
             ;;
 
@@ -95,6 +97,11 @@ while [[ $# -gt 0 ]]; do
 
         --no-rebuild)
             REBUILD=0
+            shift
+            ;;
+
+        --whole-domain)
+            EXTENT="0.0 -20.0 65.0 60.0 1.0"
             shift
             ;;
 
@@ -211,7 +218,7 @@ echo " ------------------------------------------------------------------ "
 echo "Preparing MTG data for UTC time $(date +"%d/%m/%Y %H:%M" --date="$REF_TIME") ($REF_TIME)..."
 
 ## Preprocess
-uv run python "$ROOT/py_utils/preprocessMTG.py" "$ymd" "$cycle" "$CHANNEL" "$MTG_RAW_DIR" "$MTG_READY_DIR" "$FIGS_DIR" \
+uv run python "$ROOT/py_utils/preprocessMTG.py" "$ymd" "$cycle" "$CHANNEL" "$MTG_RAW_DIR" "$MTG_READY_DIR" "$FIGS_DIR" $EXTENT\
     || { echo "Failed to preprocess MTG data!!" >&2; exit 1; }
 
 echo "Finished pre-processing MTG data."
@@ -249,7 +256,7 @@ echo "Calling magic..."
 
 
 ## Post-process plots
-uv run python "$ROOT/py_utils/post.py" "$OUTPATH" "$FIGS_DIR" || { echo "Failed to post-process MTG data!!" >&2; exit 1; }
+uv run python "$ROOT/py_utils/post.py" "$OUTPATH" "$FIGS_DIR" $EXTENT || { echo "Failed to post-process MTG data!!" >&2; exit 1; }
 
 echo "Done! Thanks for now."
 echo " ------------------------------------------------------------------ "

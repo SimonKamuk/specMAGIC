@@ -28,6 +28,8 @@ data_dir = str(sys.argv[4].rstrip("/"))  # avoid trailing slash issues
 out_dir = str(sys.argv[5].rstrip("/"))  # avoid trailing slash issues
 figs_dir = str(sys.argv[6].rstrip("/"))  # avoid trailing slash issues
 
+extent = [float(x) for x in sys.argv[7:12]]
+
 
 if (chatty):
     print(" I am looking for files with date", date, "and cycle number", cycle, "...")
@@ -35,12 +37,6 @@ if (chatty):
 # files always have this funky name structure
 pattern = (data_dir + "/W_XX-EUMETSAT-Darmstadt,IMG+SAT,MTI1+FCI-1C-RRAD-*-FD--CHK-BODY-*_EUMT_*_OPE_"
     + str(date) + "*N_*_O_0*" + str(cycle) + "_*.nc")
-
-lat_min = 40 
-lat_max = 65
-lon_min = -15
-lon_max = 30
-extent = [lat_min, lon_min, lat_max, lon_max, 1]
 
 filenames = glob(pattern)
 
