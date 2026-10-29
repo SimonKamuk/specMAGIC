@@ -156,12 +156,18 @@ namespace Reflectivity {
         return z;
     }
 
-    void makeAlbedoCorrection(Climate& climatologies, PixelClimate& c, Area a, MAGIC_REAL cos_sza) {
+    void makeAlbedoCorrection(Climate& climatologies, PixelClimate& c, Area a, MAGIC_REAL cos_sza, MAGIC_REAL declination) {
 
         int idx_lu = climatologies.lu.index(a.degrees_lat, a.degrees_lon);
         int land_class = climatologies.lu.grid[idx_lu];   // 1..20
 
         c.albedo_correction = zenithCorrection(land_class, cos_sza);
+
+        // LSA SAF gives its albedo for the sun at local noon, with the zenith angle capped
+        // at 85 degrees (ATBD MTDAL 1.1, section 4.3.5). The ratio of the corrections at
+        // the current and the noon sun moves it to the current sun.
+        MAGIC_REAL noon_sza = std::min(std::abs((MAGIC_REAL) a.lat - declination), (MAGIC_REAL) (85.0 / RADTODEGREE));
+        c.noon_albedo_correction = c.albedo_correction / zenithCorrection(land_class, std::cos(noon_sza));
     }
 
     MAGIC_REAL getSurfaceAlbedo(Climate& climatologies, Area a, GroundAlbedo& alb, 
@@ -179,7 +185,8 @@ namespace Reflectivity {
     }
 
     MAGIC_REAL getBestKatoSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source, GroundAlbedo& alb,
-       const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction) {
+       const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction,
+       MAGIC_REAL noon_correction) {
 
         // This structure should be future proof for other albedo types, but we MUST default to the landmap
         // if smething is wrong. Otherwise big errors
@@ -196,8 +203,9 @@ namespace Reflectivity {
         
         } else if (alb_source == AlbedoType::LSASAF) {
 
-            // Finished albedos, so no BRDF or zenith correction. -1 where there is no value.
+            // Finished albedos for the noon sun, so no BRDF. -1 where there is no value.
             result = zarr.getKatoAlbedo(band, a);
+            if (result >= 0) result = std::min(result * noon_correction, (MAGIC_REAL) 1);
 
         }
 
@@ -217,7 +225,8 @@ namespace Reflectivity {
     }
 
     MAGIC_REAL getBestSatelliteSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source, GroundAlbedo& alb,
-        const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction ) {
+        const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction,
+        MAGIC_REAL noon_correction) {
 
         MAGIC_REAL result = -1;
 
@@ -231,6 +240,7 @@ namespace Reflectivity {
         } else if (alb_source == AlbedoType::LSASAF) {
 
             result = zarr.getSatelliteAlbedo(wavelength_nm, a);
+            if (result >= 0) result = std::min(result * noon_correction, (MAGIC_REAL) 1);
 
         }
 
@@ -264,7 +274,7 @@ MAGIC_REAL effectiveCloudAlbedo(Image& img, SolarParameters sun, Climate& climat
     MAGIC_REAL radi = (static_cast<MAGIC_REAL>(img.im.at(line, col)) - (MAGIC_REAL) DARK_OFFSET) / sun.corrected_cos_sza;
 
     MAGIC_REAL albedo = Reflectivity::getBestSatelliteSurfaceAlbedo(climatologies, a, alb_source, alb, modis, zarr, img.info.wavelength, sun.cos_sza,
-        clim.albedo_correction);
+        clim.albedo_correction, clim.noon_albedo_correction);
 
     MAGIC_REAL Rmin = 0;
     Rmin = (MAGIC_REAL) 1.1 * Rmax * (albedo + (MAGIC_REAL) 0.05);

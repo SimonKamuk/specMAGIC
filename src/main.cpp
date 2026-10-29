@@ -95,16 +95,17 @@ int main(int argc, char* argv[]) {
     geo.makeCoordinates(c, satellite_longitude_deg);
 
     // Optional fields from the zarr archives, which override the climatologies per pixel
-    ZarrInputs::Inputs zarr;
-    const char* zarr_list = std::getenv("ZARR_INPUTS");
-    if (zarr_list && *zarr_list) {
-        zarr.load(zarr_list, geo);
-        zarr.setLimits(monster, water, ozone);
-    }
-    const bool use_zarr = zarr.any();
+    ZarrInputs::Request request;
+    request.atmosphere = envFlag("ZARR_ATMOSPHERE");
+    request.albedo = albedo_source == AlbedoType::LSASAF;
+    request.strict = envFlag("STRICT_INPUTS");
 
-    if (albedo_source == AlbedoType::LSASAF && !zarr.hasAlbedo()) {
-        printf("[WARNING]: ALBEDO=LSASAF, but no LSA SAF albedo was read. Using the land-use albedo. \n");
+    ZarrInputs::Inputs zarr;
+    const bool use_zarr = request.atmosphere || request.albedo;
+    if (use_zarr) {
+        const char* zarr_list = std::getenv("ZARR_INPUTS");
+        zarr.load(zarr_list ? zarr_list : "", geo, request);
+        zarr.setLimits(monster, water, ozone);
     }
 
     ZarrInputs::Usage zarr_usage;
@@ -213,11 +214,11 @@ int main(int argc, char* argv[]) {
                     // the PixelClimate object
                     climatologies.makeLocalClimate(clim, a);
                     if (use_zarr) {
-                        zarr.apply(clim, a, albedo_source == AlbedoType::LSASAF, local_usage);
+                        zarr.apply(clim, a, local_usage);
                     }
 
                     // Add the albedo correction
-                    Reflectivity::makeAlbedoCorrection(climatologies, clim, a, sun.cos_sza);
+                    Reflectivity::makeAlbedoCorrection(climatologies, clim, a, sun.cos_sza, sun.declination);
             
                     // Correction for an FCI measuring fault
                     SunGeometry::correctZenithAngle(sun);
@@ -238,7 +239,8 @@ int main(int argc, char* argv[]) {
                         // Calculate surface albedo at this point
                         // Prefer MODIS BRDF albedo if available, otherwise use old land-use albedo.
                         clim.surface_albedo = static_cast<MAGIC_EXACT>(Reflectivity::getBestKatoSurfaceAlbedo(
-                            climatologies, a, albedo_source, alb, modis, zarr, band, sun.cos_sza, clim.albedo_correction));
+                            climatologies, a, albedo_source, alb, modis, zarr, band, sun.cos_sza, clim.albedo_correction,
+                            clim.noon_albedo_correction));
 
                         // Calculate the clear-sky ghi at this pixel
                         sc.GHI_spectral[band] = magic(monster, water, ozone, IrradianceMode::Global, band, 
@@ -309,9 +311,8 @@ int main(int argc, char* argv[]) {
     // Output information to file, recording which zarr inputs were used
     std::vector<std::pair<std::string, std::string>> attributes;
     if (use_zarr) {
-        const bool lsasaf = albedo_source == AlbedoType::LSASAF;
-        zarr.printUsage(zarr_usage, lsasaf);
-        attributes = zarr.describe(zarr_usage, lsasaf);
+        zarr.report(zarr_usage);
+        attributes = zarr.describe(zarr_usage);
     }
     radiation.toFile(img.timestamp, geo, c, attributes);
 

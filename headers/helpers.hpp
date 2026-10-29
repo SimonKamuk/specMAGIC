@@ -26,6 +26,12 @@ inline AlbedoType parseAlbedoSource(){
 
 }
 
+// Whether an environment variable is set to 1
+inline bool envFlag(const char* name) {
+    const char* env = std::getenv(name);
+    return env && std::string(env) == "1";
+}
+
 struct Config {
 
     std::string aeroclim, hclim, o3clim;

@@ -126,13 +126,13 @@ A destination check is implemented, so that if the files are found to already ex
 
 ## Inputs from zarr archives
 
-Instead of the monthly climatologies, the clear-sky inputs can be taken from zarr archives for the time of the satellite image: aerosol and ozone from CAMS, water vapour from DINI (with CAMS outside the DINI domain), and surface albedo from LSA SAF.
+Instead of the monthly climatologies, the clear-sky atmosphere can be taken from zarr archives for the time of the satellite image: aerosol and ozone from CAMS, and water vapour from DINI (with CAMS outside the DINI domain). Separately, the surface albedo can be taken from LSA SAF.
 
 ```
-./scripts/mtg.sh --ref-time "2026-08-23 13:00" --zarr-inputs
+./scripts/mtg.sh --ref-time "2026-08-23 13:00" --zarr-atmosphere-inputs --albedo LSASAF
 ```
 
-The archive locations are set with `CAMS_ZARR`, `DINI_ZARR` and `LSASAF_ZARR`; an empty value skips that archive. Anything the archives cannot provide falls back to the climatologies, with a warning. See [the input documentation](docs/inputs.md#inputs-from-zarr-archives) for the details.
+The archive locations are set with `CAMS_ZARR`, `DINI_ZARR` and `LSASAF_ZARR`. Anything requested that the archives cannot provide falls back to the climatologies with a warning, or stops the run if `--strict-inputs` is given. See [the input documentation](docs/inputs.md#inputs-from-zarr-archives) for the details.
 
 ## Further documentation
 

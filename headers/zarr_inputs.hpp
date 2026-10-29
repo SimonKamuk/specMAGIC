@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,9 +17,12 @@
 #include "types.hpp"
 
 // Fields extracted from the zarr archives by py_utils/extract_zarr_inputs.py, already on
-// the output grid. They replace the climatologies (and the albedo) pixel by pixel, wherever
-// they have a value. Every field is optional: a missing file, a missing variable or a
-// missing pixel falls back to the climatology, and the run as a whole carries on.
+// the output grid. They replace the climatologies (atmosphere) and the land-use albedo pixel
+// by pixel, wherever they have a value.
+//
+// A requested input that is not available at all (missing file or variable, file on another
+// grid) is a problem: by default it is reported and the climatology is used, with
+// strict = true the run stops. Pixels that a field does not cover only ever fall back.
 
 namespace ZarrInputs {
 
@@ -26,9 +30,19 @@ namespace ZarrInputs {
     // that NaN never occurs, so the per-pixel tests must not rely on it
     constexpr float MISSING = -9999.f;
 
+    // Share of pixels falling back to the climatology above which the run warns about it
+    constexpr double FALLBACK_WARNING_SHARE = 0.01;
+
+    struct Request {
+        bool atmosphere = false;   // aerosol and ozone from CAMS, water vapour from DINI and CAMS
+        bool albedo = false;       // albedo from LSA SAF
+        bool strict = false;       // stop instead of falling back when a requested input is missing
+    };
+
     struct Field {
         std::vector<float> values;
         std::string file;
+        std::string provenance;
 
         bool present() const { return !values.empty(); }
     };
@@ -39,10 +53,11 @@ namespace ZarrInputs {
         uint64_t backup = 0;
         uint64_t climatology = 0;
         uint64_t clipped = 0;
+        uint64_t water = 0;        // albedo only: no LSA SAF albedo over water, which is normal
 
         Tally& operator+=(const Tally& o) {
-            primary += o.primary; backup += o.backup;
-            climatology += o.climatology; clipped += o.clipped;
+            primary += o.primary; backup += o.backup; climatology += o.climatology;
+            clipped += o.clipped; water += o.water;
             return *this;
         }
     };
@@ -58,8 +73,12 @@ namespace ZarrInputs {
 
     struct Inputs {
 
-        Field aod, o3, h2o, h2o_cams, albedo_vis, albedo_nir;
+        Field aod, o3, h2o, h2o_cams, albedo_vis, albedo_nir, albedo_land;
+        Request request;
         int nlon = 0;
+
+        // Requested inputs that are not available, reported again after the run
+        std::vector<std::string> problems;
 
         // Concentration axes of the LUTs. Values from the archives are clipped to these,
         // because unlike the smooth monthly climatologies they do leave them
@@ -67,31 +86,43 @@ namespace ZarrInputs {
         MAGIC_REAL h2o_min = 0, h2o_max = 0;
         MAGIC_REAL o3_min = 0, o3_max = 0;
 
-        bool any() const {
-            return aod.present() || o3.present() || h2o.present() || h2o_cams.present()
-                || albedo_vis.present() || albedo_nir.present();
-        }
+        bool requested() const { return request.atmosphere || request.albedo; }
 
-        bool hasAlbedo() const { return albedo_vis.present() && albedo_nir.present(); }
+        // Reads every file named in the list (one path per line), then checks that each
+        // requested field was found. Throws if any was not and the request is strict.
+        void load(const std::string& list_path, const Geography& geo, Request r) {
 
-        // Reads every file named in the list (one path per line)
-        void load(const std::string& list_path, const Geography& geo) {
-
+            request = r;
             nlon = geo.nlon;
 
-            std::ifstream in(list_path);
-            if (!in) {
-                std::printf("[WARNING]: Could not open zarr input list %s. Using climatologies. \n",
-                    list_path.c_str());
-                return;
+            if (list_path.empty()) {
+                problem("ZARR_INPUTS is not set, so no zarr inputs were given");
+            } else if (std::ifstream in{list_path}) {
+                std::string path;
+                while (std::getline(in, path)) {
+                    if (!path.empty()) readFile(path, geo);
+                }
+            } else {
+                problem("could not open the zarr input list " + list_path);
             }
 
-            std::string path;
-            while (std::getline(in, path)) {
-                if (!path.empty()) readFile(path, geo);
+            if (request.atmosphere) {
+                expect(aod, "aod (CAMS aod550)", "the aerosol climatology");
+                expect(o3, "o3 (CAMS gtco3)", "the ozone climatology");
+                expect(h2o, "h2o (DINI wvint)", "CAMS tcwv, then the water vapour climatology");
+                expect(h2o_cams, "h2o_cams (CAMS tcwv)", "the water vapour climatology outside DINI");
+            }
+            if (request.albedo) {
+                expect(albedo_vis, "albedo_vis (LSA SAF AL-VI-DH)", "the land-use albedo");
+                expect(albedo_nir, "albedo_nir (LSA SAF AL-NI-DH)", "the land-use albedo");
+                expect(albedo_land, "albedo_land (LSA SAF QFLAGS)", "counting missing albedo over water too");
             }
 
-            if (!any()) std::printf("[WARNING]: No zarr inputs could be read. Using climatologies. \n");
+            if (request.strict && !problems.empty()) {
+                std::string message = "Requested zarr inputs are missing, and strict inputs were asked for:";
+                for (const auto& p : problems) message += "\n    " + p;
+                throw std::runtime_error(message);
+            }
         }
 
         void setLimits(const Tables::RTM& rtm, const Tables::Correction::Absorber& water,
@@ -102,73 +133,114 @@ namespace ZarrInputs {
             o3_min = ozone.concen[0];   o3_max = ozone.concen[ozone.nrows - 1];
         }
 
-        // Overrides the climatology values of this pixel wherever an archive has one
-        void apply(PixelClimate& clim, const Area& a, bool count_albedo, Usage& u) const {
+        // Overrides the climatology values of this pixel wherever an archive has one,
+        // and counts where the albedo of this pixel will come from
+        void apply(PixelClimate& clim, const Area& a, Usage& u) const {
 
-            override(clim.aod, aod, nullptr, aod_min, aod_max, u.aod, a);
-            override(clim.o3, o3, nullptr, o3_min, o3_max, u.o3, a);
+            if (request.atmosphere) {
+                useArchiveValue(clim.aod, aod, nullptr, aod_min, aod_max, u.aod, a);
+                useArchiveValue(clim.o3, o3, nullptr, o3_min, o3_max, u.o3, a);
 
-            // DINI first, CAMS outside the DINI domain
-            override(clim.h2o, h2o, &h2o_cams, h2o_min, h2o_max, u.h2o, a);
+                // DINI first, CAMS outside the DINI domain
+                useArchiveValue(clim.h2o, h2o, &h2o_cams, h2o_min, h2o_max, u.h2o, a);
+            }
 
-            if (count_albedo) {
-                if (at(albedo_vis, a) != MISSING && at(albedo_nir, a) != MISSING) u.albedo.primary++;
+            if (request.albedo) {
+                if (hasAlbedo(a)) u.albedo.primary++;
+                else if (at(albedo_land, a) == 0.f) u.albedo.water++;
                 else u.albedo.climatology++;
             }
         }
 
-        // LSA SAF visible covers 0.4-0.7 um and near-infrared 0.7-4.0 um. Returns -1 where
-        // there is no value, which sends the caller to the land-use albedo.
+        // LSA SAF visible covers 0.4-0.7 um and near-infrared 0.7-4.0 um. Both must be
+        // there, so that a pixel never mixes LSA SAF and land-use albedo across bands.
+        // Returns -1 where there is no value, which sends the caller to the land-use albedo.
         MAGIC_REAL getKatoAlbedo(int zero_based_kato_band, const Area& a) const {
 
+            if (!hasAlbedo(a)) return (MAGIC_REAL)-1;
+
             // Band 16 (684.2-704.4 nm) is the last that is mostly visible
-            return albedo(zero_based_kato_band <= 15 ? albedo_vis : albedo_nir, a);
+            return at(zero_based_kato_band <= 15 ? albedo_vis : albedo_nir, a);
         }
 
         MAGIC_REAL getSatelliteAlbedo(double wavelength_nm, const Area& a) const {
-            return albedo(wavelength_nm < 700. ? albedo_vis : albedo_nir, a);
+
+            if (!hasAlbedo(a)) return (MAGIC_REAL)-1;
+            return at(wavelength_nm < 700. ? albedo_vis : albedo_nir, a);
         }
 
-        // For the global attributes of the output files
-        std::vector<std::pair<std::string, std::string>> describe(const Usage& u, bool lsasaf) const {
+        // For the global attributes of the output files: where every requested input came from
+        std::vector<std::pair<std::string, std::string>> describe(const Usage& u) const {
 
             std::vector<std::pair<std::string, std::string>> attrs;
 
-            const std::pair<const char*, const Field*> fields[] = {
-                {"zarr_aod_file", &aod}, {"zarr_o3_file", &o3}, {"zarr_h2o_file", &h2o},
-                {"zarr_h2o_backup_file", &h2o_cams},
-                {"zarr_albedo_vis_file", &albedo_vis}, {"zarr_albedo_nir_file", &albedo_nir}};
-
-            for (const auto& f : fields) {
-                if (f.second->present()) attrs.emplace_back(f.first, f.second->file);
+            if (request.atmosphere) {
+                attrs.emplace_back("aod_source", source(aod, "aerosol climatology"));
+                attrs.emplace_back("o3_source", source(o3, "ozone climatology"));
+                attrs.emplace_back("h2o_source", source(h2o, "water vapour climatology"));
+                attrs.emplace_back("h2o_backup_source", source(h2o_cams, "water vapour climatology"));
+                attrs.emplace_back("aod_usage", summary(u.aod, false));
+                attrs.emplace_back("o3_usage", summary(u.o3, false));
+                attrs.emplace_back("h2o_usage", summary(u.h2o, false));
+            }
+            if (request.albedo) {
+                attrs.emplace_back("albedo_vis_source", source(albedo_vis, "land-use albedo"));
+                attrs.emplace_back("albedo_nir_source", source(albedo_nir, "land-use albedo"));
+                attrs.emplace_back("albedo_usage", summary(u.albedo, true));
             }
 
-            attrs.emplace_back("zarr_aod_usage", summary(u.aod));
-            attrs.emplace_back("zarr_o3_usage", summary(u.o3));
-            attrs.emplace_back("zarr_h2o_usage", summary(u.h2o));
-            if (lsasaf) attrs.emplace_back("zarr_albedo_usage", summary(u.albedo));
+            std::string all;
+            for (const auto& p : problems) all += (all.empty() ? "" : "; ") + p;
+            if (!all.empty()) attrs.emplace_back("input_problems", all);
 
             return attrs;
         }
 
-        void printUsage(const Usage& u, bool lsasaf) const {
+        // After the run: where the inputs came from, and again every problem, so that a
+        // run that fell back is hard to miss
+        void report(const Usage& u) const {
 
-            report("aod", u.aod);
-            report("o3", u.o3);
-            report("h2o", u.h2o);
-            if (lsasaf) report("albedo", u.albedo);
+            if (request.atmosphere) {
+                report("aod", u.aod, false);
+                report("o3", u.o3, false);
+                report("h2o", u.h2o, false);
+            }
+            if (request.albedo) report("albedo", u.albedo, true);
+
+            if (problems.empty()) return;
+
+            std::printf("\n[WARNING]: ================ MISSING ZARR INPUTS ================\n");
+            for (const auto& p : problems) std::printf("[WARNING]:   %s\n", p.c_str());
+            std::printf("[WARNING]: These requested inputs fell back to the climatologies.\n");
+            std::printf("[WARNING]: Run with --strict-inputs to stop instead.\n");
+            std::printf("[WARNING]: ======================================================\n\n");
         }
 
     private:
+
+        void problem(const std::string& message) {
+            problems.push_back(message);
+            std::printf("[WARNING]: %s \n", message.c_str());
+        }
+
+        void expect(const Field& f, const char* what, const char* instead) {
+            if (!f.present()) problem(std::string(what) + " was requested but not found; using " + instead);
+        }
 
         float at(const Field& f, const Area& a) const {
             if (!f.present()) return MISSING;
             return f.values[static_cast<size_t>(a.nlat) * nlon + a.nlon];
         }
 
+        bool hasAlbedo(const Area& a) const {
+            float vis = at(albedo_vis, a);
+            float nir = at(albedo_nir, a);
+            return vis >= 0.f && vis <= 1.f && nir >= 0.f && nir <= 1.f;
+        }
+
         // Takes the primary field's value, else the backup's, clipped to the LUT axis.
         // Leaves the climatology value in place when neither has one.
-        void override(MAGIC_REAL& target, const Field& primary, const Field* backup,
+        void useArchiveValue(MAGIC_REAL& target, const Field& primary, const Field* backup,
             MAGIC_REAL lo, MAGIC_REAL hi, Tally& t, const Area& a) const {
 
             float v = at(primary, a);
@@ -186,10 +258,8 @@ namespace ZarrInputs {
             target = std::min(std::max(x, lo), hi);
         }
 
-        MAGIC_REAL albedo(const Field& f, const Area& a) const {
-            float v = at(f, a);
-            if (v == MISSING || v < 0.f || v > 1.f) return (MAGIC_REAL)-1;
-            return static_cast<MAGIC_REAL>(v);
+        static std::string source(const Field& f, const char* fallback) {
+            return f.present() ? f.provenance : std::string(fallback) + " (zarr input missing)";
         }
 
         static bool isNan(float v) {
@@ -198,24 +268,37 @@ namespace ZarrInputs {
             return (bits & 0x7f800000u) == 0x7f800000u && (bits & 0x007fffffu) != 0;
         }
 
-        static std::string summary(const Tally& t) {
+        // Shares of the day pixels; for albedo, of the day pixels on land
+        static double fallbackShare(const Tally& t) {
+            uint64_t total = t.primary + t.backup + t.climatology;
+            return total == 0 ? 0. : static_cast<double>(t.climatology) / total;
+        }
+
+        static std::string summary(const Tally& t, bool albedo) {
             uint64_t total = t.primary + t.backup + t.climatology;
             if (total == 0) return "no day pixels";
 
-            char buf[160];
-            std::snprintf(buf, sizeof buf,
-                "%.1f%% zarr, %.1f%% zarr backup, %.1f%% climatology, %.1f%% clipped to LUT",
-                100. * t.primary / total, 100. * t.backup / total,
-                100. * t.climatology / total, 100. * t.clipped / total);
+            char buf[200];
+            if (albedo) {
+                std::snprintf(buf, sizeof buf,
+                    "%.1f%% of land day pixels from LSA SAF, %.1f%% land-use albedo; "
+                    "%.1f%% of all day pixels are water and use the land-use albedo",
+                    100. * t.primary / total, 100. * t.climatology / total,
+                    100. * t.water / (total + t.water));
+            } else {
+                std::snprintf(buf, sizeof buf,
+                    "%.1f%% zarr, %.1f%% zarr backup, %.1f%% climatology, %.1f%% clipped to LUT",
+                    100. * t.primary / total, 100. * t.backup / total,
+                    100. * t.climatology / total, 100. * t.clipped / total);
+            }
             return buf;
         }
 
-        static void report(const char* name, const Tally& t) {
-            uint64_t total = t.primary + t.backup + t.climatology;
-            if (total == 0) return;
+        static void report(const char* name, const Tally& t, bool albedo) {
+            if (t.primary + t.backup + t.climatology + t.water == 0) return;
 
-            const char* level = (t.climatology > 0 || t.clipped > 0) ? "[WARNING]: " : "";
-            std::printf("%sZarr input %s: %s \n", level, name, summary(t).c_str());
+            const char* level = fallbackShare(t) > FALLBACK_WARNING_SHARE ? "[WARNING]: " : "";
+            std::printf("%sZarr input %s: %s \n", level, name, summary(t, albedo).c_str());
         }
 
         bool sameAxis(const std::vector<double>& file_axis, const MAGIC_EXACT* geo_axis) const {
@@ -225,11 +308,20 @@ namespace ZarrInputs {
             return true;
         }
 
+        static std::string textAttribute(int ncid, int varid, const char* name) {
+            size_t len = 0;
+            if (nc_inq_attlen(ncid, varid, name, &len) != NC_NOERR) return "";
+
+            std::string value(len, '\0');
+            if (nc_get_att_text(ncid, varid, name, value.data()) != NC_NOERR) return "";
+            return value;
+        }
+
         void readFile(const std::string& path, const Geography& geo) {
 
             int ncid;
             if (nc_open(path.c_str(), NC_NOWRITE, &ncid) != NC_NOERR) {
-                std::printf("[WARNING]: Could not open zarr input %s. Skipping it. \n", path.c_str());
+                problem("could not open zarr input " + path);
                 return;
             }
 
@@ -253,15 +345,14 @@ namespace ZarrInputs {
             }
 
             if (!ok) {
-                std::printf("[WARNING]: Zarr input %s is not on the output grid. Skipping it. \n",
-                    path.c_str());
+                problem("zarr input " + path + " is not on the output grid of magic-config.asc");
                 nc_close(ncid);
                 return;
             }
 
             const std::pair<const char*, Field*> fields[] = {
                 {"aod", &aod}, {"o3", &o3}, {"h2o", &h2o}, {"h2o_cams", &h2o_cams},
-                {"albedo_vis", &albedo_vis}, {"albedo_nir", &albedo_nir}};
+                {"albedo_vis", &albedo_vis}, {"albedo_nir", &albedo_nir}, {"albedo_land", &albedo_land}};
 
             for (const auto& f : fields) {
 
@@ -276,8 +367,7 @@ namespace ZarrInputs {
 
                 std::vector<float> values(file_nlat * file_nlon);
                 if (nc_get_var_float(ncid, varid, values.data()) != NC_NOERR) {
-                    std::printf("[WARNING]: Could not read %s from %s. Skipping it. \n",
-                        f.first, path.c_str());
+                    problem(std::string("could not read ") + f.first + " from " + path);
                     continue;
                 }
 
@@ -287,6 +377,8 @@ namespace ZarrInputs {
 
                 f.second->values = std::move(values);
                 f.second->file = path;
+                f.second->provenance = textAttribute(ncid, varid, "provenance");
+                if (f.second->provenance.empty()) f.second->provenance = path;
             }
 
             nc_close(ncid);

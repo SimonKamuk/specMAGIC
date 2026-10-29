@@ -1,19 +1,19 @@
 """
-Extracts the clear-sky inputs for one satellite image from the zarr archives, and writes them
-on the specMAGIC output grid, so that magic can use them instead of the climatologies.
+Extracts inputs for one satellite image from the zarr archives, and writes them on the
+specMAGIC output grid, so that magic can use them instead of the climatologies and albedo maps.
 
     python extract_zarr_inputs.py <image_list> <config> <satellite_toml> <out_dir> <list_out>
-        [--cams PATH] [--dini PATH] [--lsasaf PATH]
+        [--cams PATH] [--dini PATH] [--lsasaf PATH] [--strict]
 
-Every source is optional. Whatever cannot be extracted is left out with a warning, and magic
-falls back to the climatology (or the land-use albedo) for it. This script therefore exits
-with 0 unless its own arguments are wrong.
+Every archive is optional. Whatever cannot be extracted is reported, and magic falls back to
+the climatology (or the land-use albedo) for it. With --strict, any such problem makes this
+script exit with 1 instead.
 
-One NetCDF file is written per source and source time, and their paths are listed in
-<list_out>, which magic reads through the ZARR_INPUTS environment variable.
+One NetCDF file is written per archive and source time, and their paths are listed in
+<list_out>, which magic reads through the ZARR_INPUTS environment variable. A file that an
+earlier run already wrote for the same source time and grid is reused, not extracted again.
 """
 import os
-os.environ["DASK_NUM_WORKERS"] = "1"
 import sys
 import argparse
 import tomllib
@@ -35,9 +35,21 @@ HOURLY_MAX_BEFORE = np.timedelta64(3, "h")
 HOURLY_MAX_AFTER = np.timedelta64(30, "m")
 DAILY_MAX_BEFORE = np.timedelta64(10, "D")
 
+# LSA SAF pixels whose albedo was last updated longer ago than this are dropped
+MAX_ALBEDO_AGE_DAYS = 10
+
+# Requested inputs that could not be extracted
+problems = []
+
 
 def warn(message):
     print(f"[WARNING] zarr inputs: {message}", file=sys.stderr, flush=True)
+
+
+def problem(message):
+    """A requested input that cannot be used. Fatal with --strict."""
+    problems.append(message)
+    warn(message)
 
 
 ## ------ What the model grid and image look like ------
@@ -54,7 +66,10 @@ def config_values(config_path):
 
 
 def output_grid(config_path, subsatellite_longitude_deg):
-    """The lat/lon axes that Geography::makeCoordinates builds in headers/navigation.hpp."""
+    """
+    The lat/lon axes that Geography::makeCoordinates builds in headers/navigation.hpp.
+    magic checks the axes of every file it reads, so any drift here is caught there.
+    """
     v = config_values(config_path)
     latdim, londim = int(v[27]), int(v[28])
 
@@ -94,28 +109,69 @@ def preferred_order(times, target, max_before, max_after):
     return idx[np.lexsort((times[idx], np.abs(diff[idx])))]
 
 
-def first_with_data(order, load, label):
-    """Loads candidates in order and returns the first one with any data on the output grid."""
+def first_with_data(order, load, cached, label):
+    """
+    The first candidate that an earlier run already extracted, or that has any data on the
+    output grid. Returns its index and fields, where the fields are None if cached.
+    """
     for i in order:
-        field = load(i)
-        if np.isfinite(field).any():
-            return i, field
-    warn(f"{label}: no usable time within the allowed window")
+        if cached(i):
+            return i, None
+        fields = load(i)
+        if any(np.isfinite(f).any() for f in fields.values() if f.dtype.kind == "f"):
+            return i, fields
+    problem(f"{label}: no usable time within the allowed window")
     return None, None
 
 
 def check_units(da, accepted, label):
     units = da.attrs.get("units", "")
     if units not in accepted:
-        warn(f"{label}: unexpected units '{units}', expected one of {accepted}; skipping")
+        problem(f"{label}: unexpected units '{units}', expected one of {accepted}")
         return False
     return True
+
+
+def stamp(when):
+    return str(np.datetime_as_string(when, unit="m"))
+
+
+## ------ Earlier extractions ------
+
+def source_path(out_dir, source, when):
+    return os.path.join(out_dir, f"{source}-{stamp(when).replace('-', '').replace('T', '').replace(':', '')}.nc")
+
+
+def on_grid(ds, lat, lon, grid_attrs):
+    """Whether a file was written for this output grid."""
+    return (ds.sizes.get("lat") == len(lat) and ds.sizes.get("lon") == len(lon)
+            and all(k in ds.attrs and np.isclose(ds.attrs[k], v) for k, v in grid_attrs.items()))
+
+
+def has_cached(path, names, lat, lon, grid_attrs, provenance=None):
+    """
+    Whether the file at path already holds all of names on this grid. If provenance is
+    given, it must match too, so that a newer DINI run replaces an older one.
+    """
+    if not os.path.exists(path):
+        return False
+    try:
+        with xr.open_dataset(path) as ds:
+            if not on_grid(ds, lat, lon, grid_attrs):
+                return False
+            return all(n in ds and (provenance is None or ds[n].attrs.get("provenance") == provenance)
+                       for n in names)
+    except (OSError, ValueError):
+        return False
 
 
 ## ------ Regridding ------
 
 def axis_weights(src, dst):
     """Lower neighbour and upper weight of each dst point on an ascending src axis."""
+    if not np.all(np.diff(src) > 0):
+        raise ValueError("axis_weights needs a strictly ascending source axis")
+
     i = np.clip(np.searchsorted(src, dst, side="right") - 1, 0, len(src) - 2)
     w = (dst - src[i]) / (src[i + 1] - src[i])
     inside = (dst >= src[0]) & (dst <= src[-1])
@@ -160,21 +216,25 @@ def bilinear_points(src_y, src_x, values, y, x):
 
 
 ## ------ The sources ------
+#
+# Each returns a list of (name, field, source time, attrs), where field is None if an
+# earlier run already wrote it for that source time.
 
-def extract_cams(path, target, lat, lon):
+def extract_cams(path, target, lat, lon, grid_attrs, out_dir):
     """Aerosol and ozone, plus water vapour as the backup for DINI."""
     ds = xr.open_zarr(path)
     fields = [("aod", "aod550", DIMENSIONLESS, 1.0),
               ("o3", "gtco3", KG_M2, 1.0 / DU_IN_KG_M2),
               ("h2o_cams", "tcwv", KG_M2, 1.0)]
 
-    order = preferred_order(ds.valid_time.values, target, HOURLY_MAX_BEFORE, HOURLY_MAX_AFTER)
+    times = ds.valid_time.values
+    order = preferred_order(times, target, HOURLY_MAX_BEFORE, HOURLY_MAX_AFTER)
 
     results = []
     for name, var, units, scale in fields:
         label = f"cams {var}"
         if var not in ds:
-            warn(f"{label}: not in {path}; skipping")
+            problem(f"{label}: not in {path}")
             continue
         if not check_units(ds[var], units, label):
             continue
@@ -182,23 +242,27 @@ def extract_cams(path, target, lat, lon):
         def load(i):
             da = ds[var].isel(valid_time=i)
             values = da.values.astype(np.float64) * scale
-            return bilinear_regular(da.latitude.values, da.longitude.values, values, lat, lon)
+            return {name: bilinear_regular(da.latitude.values, da.longitude.values, values, lat, lon)}
 
-        i, field = first_with_data(order, load, label)
+        def cached(i):
+            return has_cached(source_path(out_dir, "cams", times[i]), [name], lat, lon, grid_attrs)
+
+        i, loaded = first_with_data(order, load, cached, label)
         if i is None:
             continue
 
-        results.append((name, field, ds.valid_time.values[i],
-                        {"source_store": path, "source_variable": var}))
+        provenance = f"cams {var} valid {stamp(times[i])} from {path}"
+        results.append((name, None if loaded is None else loaded[name], times[i],
+                        {"provenance": provenance}))
     return results
 
 
-def extract_dini(path, target, lat, lon):
+def extract_dini(path, target, lat, lon, grid_attrs, out_dir):
     """Water vapour from the most recent DINI run valid at the chosen time."""
     ds = xr.open_zarr(path)
     label = "dini wvint"
     if "wvint" not in ds:
-        warn(f"{label}: not in {path}; skipping")
+        problem(f"{label}: not in {path}")
         return []
     if not check_units(ds.wvint, KG_M2, label):
         return []
@@ -209,131 +273,179 @@ def extract_dini(path, target, lat, lon):
     in_box = ((lat[:, None] >= dini_lat.min()) & (lat[:, None] <= dini_lat.max())
               & (lon[None, :] >= dini_lon.min()) & (lon[None, :] <= dini_lon.max()))
     if not in_box.any():
-        warn(f"{label}: the output grid does not overlap the DINI domain; skipping")
+        problem(f"{label}: the output grid does not overlap the DINI domain")
         return []
 
-    lat2d, lon2d = np.broadcast_arrays(lat[:, None], lon[None, :])
-    crs = CRS.from_wkt(ds.dini_projection.attrs["crs_wkt"])
-    x, y = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(
-        lon2d[in_box], lat2d[in_box])
-
     # Every (run, step) pair, and the time it is valid at
-    runs = ds.forecast_reference_time.values
+    runs = ds.forecast_reference_time.values.astype("datetime64[s]")
     steps = ds.step.values
     if not np.issubdtype(steps.dtype, np.timedelta64):
         steps = steps.astype("timedelta64[h]")
     run_idx, step_idx = np.meshgrid(np.arange(len(runs)), np.arange(len(steps)), indexing="ij")
     run_idx, step_idx = run_idx.ravel(), step_idx.ravel()
-    valid = (runs[run_idx] + steps[step_idx]).astype("datetime64[s]")
+    valid = runs[run_idx] + steps[step_idx]
 
     # Nearest valid time first, and for the same valid time the most recent run
     diff = valid - target
     ok = np.flatnonzero((diff >= -HOURLY_MAX_BEFORE) & (diff <= HOURLY_MAX_AFTER))
-    order = ok[np.lexsort((-runs[run_idx[ok]].astype("datetime64[s]").astype(np.int64),
-                           valid[ok], np.abs(diff[ok])))]
+    order = ok[np.lexsort((-runs[run_idx[ok]].astype(np.int64), valid[ok], np.abs(diff[ok])))]
+
+    def provenance(k):
+        step_hours = int(steps[step_idx[k]] / np.timedelta64(1, "h"))
+        return (f"dini wvint run {stamp(runs[run_idx[k]])} +{step_hours} h, "
+                f"valid {stamp(valid[k])} from {path}")
+
+    lat2d, lon2d = np.broadcast_arrays(lat[:, None], lon[None, :])
+    projected = []
 
     def load(k):
+        if not projected:
+            crs = CRS.from_wkt(ds.dini_projection.attrs["crs_wkt"])
+            projected.extend(Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(
+                lon2d[in_box], lat2d[in_box]))
+        x, y = projected
+
         values = ds.wvint.isel(forecast_reference_time=run_idx[k], step=step_idx[k]).values
         field = np.full(lat2d.shape, np.nan, dtype=np.float32)
         field[in_box] = bilinear_points(ds.y.values, ds.x.values, values, y, x)
-        return field
+        return {"h2o": field}
 
-    k, field = first_with_data(order, load, label)
+    def cached(k):
+        return has_cached(source_path(out_dir, "dini", valid[k]), ["h2o"], lat, lon, grid_attrs,
+                          provenance(k))
+
+    k, loaded = first_with_data(order, load, cached, label)
     if k is None:
         return []
 
-    run = runs[run_idx[k]]
-    return [("h2o", field, valid[k],
-             {"source_store": path, "source_variable": "wvint",
-              "forecast_reference_time": str(np.datetime_as_string(run, unit="m")),
-              "step_hours": int(steps[step_idx[k]] / np.timedelta64(1, "h"))})]
+    return [("h2o", None if loaded is None else loaded["h2o"], valid[k],
+             {"provenance": provenance(k)})]
 
 
-def extract_lsasaf(path, target, lat, lon):
-    """Visible and near-infrared black-sky albedo, used as they are."""
+def extract_lsasaf(path, target, lat, lon, grid_attrs, out_dir):
+    """
+    Visible and near-infrared black-sky albedo, used as they are, plus the land/water mask
+    from QFLAGS, so that magic can tell normal gaps over water from missing land albedo.
+    """
     ds = xr.open_zarr(path)
-    fields = [("albedo_vis", "AL-VI-DH"), ("albedo_nir", "AL-NI-DH")]
+    for var in ("AL-VI-DH", "AL-NI-DH", "QFLAGS", "Z_Age"):
+        if var not in ds:
+            problem(f"lsasaf: {var} not in {path}")
+            return []
 
-    # Geostationary scan angles, in radians, of every output point
-    crs = CRS.from_cf(ds.geostationary.attrs)
-    height = ds.geostationary.attrs["perspective_point_height"]
-    lat2d, lon2d = np.broadcast_arrays(lat[:, None], lon[None, :])
-    x, y = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(lon2d, lat2d)
-    x, y = x / height, y / height
-
-    # Nearest neighbour; points off the disc come back non-finite
-    sx, sy = ds.x.values, ds.y.values
-    ix = np.rint((x - sx[0]) / ((sx[-1] - sx[0]) / (len(sx) - 1)))
-    iy = np.rint((y - sy[0]) / ((sy[-1] - sy[0]) / (len(sy) - 1)))
-    on_disc = (np.isfinite(ix) & np.isfinite(iy)
-               & (ix >= 0) & (ix < len(sx)) & (iy >= 0) & (iy < len(sy)))
-    if not on_disc.any():
-        warn("lsasaf: the output grid is not on the LSA SAF disc; skipping")
-        return []
-    ix, iy = ix[on_disc].astype(int), iy[on_disc].astype(int)
-
-    # Only read the window that the output grid covers
-    x0, x1, y0, y1 = ix.min(), ix.max() + 1, iy.min(), iy.max() + 1
+    names = ["albedo_vis", "albedo_nir", "albedo_land"]
+    times = ds.time.values
 
     # Daily product: the image's own day, or the most recent day before it
     day = target.astype("datetime64[D]").astype("datetime64[s]")
-    order = preferred_order(ds.time.values, day, DAILY_MAX_BEFORE, np.timedelta64(0, "s"))
+    order = preferred_order(times, day, DAILY_MAX_BEFORE, np.timedelta64(0, "s"))
+
+    def cached(i):
+        return has_cached(source_path(out_dir, "lsasaf", times[i]), names, lat, lon, grid_attrs)
+
+    lat2d, lon2d = np.broadcast_arrays(lat[:, None], lon[None, :])
+    disc = {}
+
+    def locate():
+        """Nearest LSA SAF pixel of every output point that lies on the disc."""
+        crs = CRS.from_cf(ds.geostationary.attrs)
+        height = ds.geostationary.attrs["perspective_point_height"]
+        x, y = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(lon2d, lat2d)
+
+        # Geostationary scan angles in radians; points off the disc come back non-finite
+        sx, sy = ds.x.values, ds.y.values
+        ix = np.rint((x / height - sx[0]) / ((sx[-1] - sx[0]) / (len(sx) - 1)))
+        iy = np.rint((y / height - sy[0]) / ((sy[-1] - sy[0]) / (len(sy) - 1)))
+        on_disc = (np.isfinite(ix) & np.isfinite(iy)
+                   & (ix >= 0) & (ix < len(sx)) & (iy >= 0) & (iy < len(sy)))
+        disc.update(on_disc=on_disc, ix=ix[on_disc].astype(int), iy=iy[on_disc].astype(int))
+
+    def load(i):
+        if not disc:
+            locate()
+        on_disc, ix, iy = disc["on_disc"], disc["ix"], disc["iy"]
+        if not on_disc.any():
+            raise ValueError("the output grid is not on the LSA SAF disc")
+
+        # Only read the window that the output grid covers
+        window = dict(time=i, y=slice(iy.min(), iy.max() + 1), x=slice(ix.min(), ix.max() + 1))
+
+        def sample(var):
+            values = ds[var].isel(**window).values
+            return values[iy - iy.min(), ix - ix.min()]
+
+        age = sample("Z_Age")
+        fresh = (age >= 0) & (age <= MAX_ALBEDO_AGE_DAYS)
+
+        fields = {}
+        for name, var in (("albedo_vis", "AL-VI-DH"), ("albedo_nir", "AL-NI-DH")):
+            v = sample(var).astype(np.float32)
+            v[~fresh | (v < 0) | (v > 1)] = np.nan
+            fields[name] = np.full(lat2d.shape, np.nan, dtype=np.float32)
+            fields[name][on_disc] = v
+
+        # Bit 0 of QFLAGS is set on land. Off the disc counts as not land.
+        land = np.zeros(lat2d.shape, dtype=np.int8)
+        land[on_disc] = sample("QFLAGS").astype(np.uint8) & 1
+        fields["albedo_land"] = land
+        return fields
+
+    i, loaded = first_with_data(order, load, cached, "lsasaf albedo")
+    if i is None:
+        return []
+
+    when = times[i]
+    if when.astype("datetime64[D]") != target.astype("datetime64[D]"):
+        warn(f"lsasaf: no product for the image's day, using {str(when)[:10]}")
 
     results = []
-    for name, var in fields:
-        label = f"lsasaf {var}"
-        if var not in ds:
-            warn(f"{label}: not in {path}; skipping")
-            continue
-
-        def load(i):
-            window = ds[var].isel(time=i, y=slice(y0, y1), x=slice(x0, x1)).values
-            field = np.full(lat2d.shape, np.nan, dtype=np.float32)
-            field[on_disc] = window[iy - y0, ix - x0]
-            field[(field < 0) | (field > 1)] = np.nan
-            return field
-
-        i, field = first_with_data(order, load, label)
-        if i is None:
-            continue
-
-        when = ds.time.values[i]
-        if when.astype("datetime64[D]") != target.astype("datetime64[D]"):
-            warn(f"{label}: no product for the image's day, using {str(when)[:10]}")
-
-        results.append((name, field, when, {"source_store": path, "source_variable": var}))
+    for name, var in (("albedo_vis", "AL-VI-DH"), ("albedo_nir", "AL-NI-DH"), ("albedo_land", "QFLAGS")):
+        attrs = {"provenance": f"lsasaf {var} day {str(when)[:10]} from {path}"}
+        results.append((name, None if loaded is None else loaded[name], when, attrs))
     return results
 
 
 ## ------ Output ------
 
 def write_source_files(source, results, lat, lon, grid_attrs, target, out_dir):
-    """One file per source time, written atomically. Returns the paths written."""
-    written = []
+    """
+    One file per source time, written atomically, keeping what an earlier run already
+    wrote there for this grid. Returns the paths of all files used, written or reused.
+    """
+    used = []
     for when in sorted({r[2] for r in results}):
-        stamp = str(np.datetime_as_string(when, unit="m")).replace("-", "").replace("T", "").replace(":", "")
-        path = os.path.join(out_dir, f"{source}-{stamp}.nc")
+        path = source_path(out_dir, source, when)
+        new = {name: (field, attrs) for name, field, t, attrs in results if t == when and field is not None}
+
+        if not new:
+            print(f" Reusing {path}")
+            used.append(path)
+            continue
 
         data_vars = {}
-        for name, field, t, attrs in results:
-            if t != when:
-                continue
+        if os.path.exists(path):
+            with xr.open_dataset(path) as old:
+                if on_grid(old, lat, lon, grid_attrs):
+                    data_vars = {n: old[n].load().variable for n in old.data_vars if n not in new}
+
+        for name, (field, attrs) in new.items():
             data_vars[name] = xr.Variable(("lat", "lon"), field, attrs=attrs)
 
         ds = xr.Dataset(data_vars, coords={"lat": ("lat", lat), "lon": ("lon", lon)})
-        ds.attrs = {**grid_attrs, "source": source,
-                    "source_time": str(np.datetime_as_string(when, unit="m")),
-                    "image_time": str(np.datetime_as_string(target, unit="m")),
+        ds.attrs = {**grid_attrs, "source": source, "source_time": stamp(when),
+                    "image_time": stamp(target),
                     "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
-        encoding = {name: {"zlib": True, "complevel": 1, "dtype": "float32"} for name in data_vars}
+        encoding = {name: {"zlib": True, "complevel": 1, "_FillValue": None,
+                           "dtype": "int8" if name == "albedo_land" else "float32"}
+                    for name in data_vars}
         tmp = path + ".tmp"
         ds.to_netcdf(tmp, engine="netcdf4", encoding=encoding)
         os.replace(tmp, path)
 
-        print(f" Wrote {', '.join(data_vars)} valid {ds.attrs['source_time']} to {path}")
-        written.append(path)
-    return written
+        print(f" Wrote {', '.join(new)} valid {stamp(when)} to {path}")
+        used.append(path)
+    return used
 
 
 def main():
@@ -346,6 +458,8 @@ def main():
     parser.add_argument("--cams", default="")
     parser.add_argument("--dini", default="")
     parser.add_argument("--lsasaf", default="")
+    parser.add_argument("--strict", action="store_true",
+                        help="exit with 1 if a requested input cannot be extracted")
     args = parser.parse_args()
 
     target = image_time(args.image_list)
@@ -354,22 +468,28 @@ def main():
 
     print(f" Extracting zarr inputs for image time {target}...")
 
-    written = []
+    used = []
     for source, path, extract in (("cams", args.cams, extract_cams),
                                   ("dini", args.dini, extract_dini),
                                   ("lsasaf", args.lsasaf, extract_lsasaf)):
         if not path:
             continue
         try:
-            results = extract(path, target, lat, lon)
+            results = extract(path, target, lat, lon, grid_attrs, args.out_dir)
         except Exception as e:
-            warn(f"{source}: could not extract from {path} ({type(e).__name__}: {e}); "
-                 "magic will use the climatology instead")
+            problem(f"{source}: could not extract from {path} ({type(e).__name__}: {e})")
             continue
-        written += write_source_files(source, results, lat, lon, grid_attrs, target, args.out_dir)
+        used += write_source_files(source, results, lat, lon, grid_attrs, target, args.out_dir)
 
     with open(args.list_out, "w") as f:
-        f.writelines(p + "\n" for p in written)
+        f.writelines(p + "\n" for p in used)
+
+    if problems and args.strict:
+        print(f"[ERROR] zarr inputs: {len(problems)} requested input(s) could not be extracted "
+              "and --strict was given:", file=sys.stderr)
+        for p in problems:
+            print(f"    {p}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

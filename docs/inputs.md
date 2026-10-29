@@ -201,12 +201,19 @@ geography.
 
 ## Inputs from zarr archives
 
-With `--zarr-inputs`, the driver replaces the climatologies, and the albedo, with fields for
-the time of the satellite image. `py_utils/extract_zarr_inputs.py` reads them from the
-archives, converts and regrids them onto the output grid, and writes one NetCDF file per
-archive and source time into `zarr_handled/`. Their paths are listed in `zarr_inputs.txt`,
-which `magic` reads through the `ZARR_INPUTS` environment variable (`ZarrInputs::Inputs` in
-`headers/zarr_inputs.hpp`).
+Two options of the driver replace static tables with fields for the time of the satellite
+image, read from zarr archives:
+
+* `--zarr-atmosphere-inputs` replaces the aerosol, ozone and water vapour climatologies.
+* `--albedo LSASAF` replaces the land-use albedo (and `reflec.lut`) by the LSA SAF albedo.
+
+They are independent, so that their effects can be judged separately, and either can be
+combined with the other albedo options. `py_utils/extract_zarr_inputs.py` reads the archives,
+converts and regrids the fields onto the output grid, and writes one NetCDF file per archive
+and source time into `zarr_handled/`. Their paths are listed in `zarr_inputs.txt`, which
+`magic` reads through the `ZARR_INPUTS` environment variable (`ZarrInputs::Inputs` in
+`headers/zarr_inputs.hpp`). A file that an earlier run wrote for the same source time and
+output grid is reused, so the images of one hour share their CAMS and DINI extraction.
 
 | Input | Archive and variable | Replaces | Conversion |
 |---|---|---|---|
@@ -225,22 +232,39 @@ image's own day, else the most recent day up to 10 days before it, with a warnin
 bilinearly in its Lambert projection, so it is only available inside the DINI domain. LSA SAF
 is taken from the nearest pixel of its geostationary grid.
 
-**Albedo.** The black-sky (directional-hemispherical) albedos are used as they are, with no
-BRDF model and no `zenithCorrection`: visible (0.4-0.7 um) for the Kato bands up to band 16
-and for satellite channels below 700 nm, near-infrared (0.7-4.0 um) otherwise. LSA SAF has no
-albedo over water, so sea pixels use the land-use albedo, as on the MODIS path.
+**Albedo.** The black-sky (directional-hemispherical) albedos are used with no BRDF model:
+visible (0.4-0.7 um) for the Kato bands up to band 16 and for satellite channels below 700 nm,
+near-infrared (0.7-4.0 um) otherwise. A pixel uses LSA SAF only where both are available, so
+that it never mixes the two sources across bands. Pixels whose albedo is more than 10 days old
+(`Z_Age`) are dropped. LSA SAF has no albedo over water (bit 0 of `QFLAGS` unset), so water uses
+the land-use albedo, which is expected and not reported.
+
+According to the LSA SAF albedo ATBD (SAF/LAND/MF/ATBD_MTDAL 1.1, section 4.3.5), the
+directional-hemispherical albedo is given for the solar zenith angle at local noon of each
+pixel and day, capped at 85 degrees, not for the time of the image. specMAGIC moves it to the
+current sun with the ratio of `zenithCorrection` at the current and at the noon zenith angle,
+for the pixel's land-use class, and caps the result at 1. The noon angle is |latitude -
+declination| for the image's day, also when the albedo comes from an earlier day. The ATBD also
+suggests blending with the bi-hemispherical albedo by the diffuse fraction; that is not done,
+since LSA SAF provides the bi-hemispherical albedo only as broadband.
 
 **Range.** Unlike the smooth monthly climatologies, these fields do leave the LUT axes: CAMS
 ozone over Europe spans about 197-549 DU against the 210-525 DU of `o3corr-l.lut`, and AOD
 reaches about 4.6 in dust events against the 2.0 of `magic-clear_spectral.lut`. Values from the
-archives are therefore clipped to the axes, whereas the climatologies still throw.
+archives are therefore clipped to the axes. Climatology values are not: out-of-range water
+vapour or ozone throws, and out-of-range AOD is extrapolated linearly.
 
-**Fallback.** Nothing here stops a run. An archive that cannot be read, a variable that is
-missing, a time outside the window, or a file on a different output grid is left out with a
-warning, and the climatology is used. Per pixel, any value that is missing (outside the DINI
-domain, off the LSA SAF disc, over water for albedo) falls back the same way. After the run,
-`magic` prints which share of the day pixels came from each source and how many were clipped,
-and writes the same, along with the files used, as global attributes of the output files.
+**Missing inputs.** A requested input that is not available at all, because an archive cannot
+be read, a variable or its units are wrong, no time lies within the window, the archive does
+not cover the output grid, or a file is not on the output grid, is reported, and the
+climatology (or land-use albedo) is used for it. The report is repeated at the end of the run.
+With `--strict-inputs` the run stops instead. Pixels that an available field does not cover,
+such as those outside the DINI domain, always fall back without stopping the run; `magic`
+warns when more than 1% of the day pixels (of the land pixels, for albedo) do so.
+
+**Provenance.** `magic` prints which share of the day pixels came from each source and how many
+were clipped, and writes, as global attributes of the output files, the source of each
+requested input (archive, variable, source time, DINI run), those shares, and any problems.
 
 ## Unused files and dead config fields
 
