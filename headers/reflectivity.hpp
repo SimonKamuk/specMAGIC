@@ -6,6 +6,7 @@
 #include "image.hpp"
 #include "sun_geometry.hpp"
 #include "modis_brdf.hpp"
+#include "zarr_inputs.hpp"
 
 using namespace Tables;
 
@@ -28,12 +29,12 @@ namespace Reflectivity {
     MAGIC_REAL getSurfaceAlbedo(Climate& climatologies, Area a, GroundAlbedo& alb, int band);
 
     MAGIC_REAL getBestKatoSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source,
-        GroundAlbedo& alb, const ModisBrdf::ModisBrdfAlbedo& modis, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction);
+        GroundAlbedo& alb, const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction);
 
     MAGIC_REAL getBestSatelliteSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source, GroundAlbedo& alb,
-        const ModisBrdf::ModisBrdfAlbedo& modis, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction);
+        const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction);
 
 }
 
 MAGIC_REAL effectiveCloudAlbedo(Image& img, SolarParameters sun, Climate& climatologies, AlbedoType alb_source, GroundAlbedo& alb,
-    const ModisBrdf::ModisBrdfAlbedo& modis, Area a, PixelClimate& clim, int line, int col);
+    const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, Area a, PixelClimate& clim, int line, int col);

@@ -124,6 +124,16 @@ These are too large to be stored here, but the user can toggle whether to downlo
 The total file size is ~ 6 GB. The download may take some minutes.
 A destination check is implemented, so that if the files are found to already exist in the correct directory, they will not be overwritten. 
 
+## Inputs from zarr archives
+
+Instead of the monthly climatologies, the clear-sky inputs can be taken from zarr archives for the time of the satellite image: aerosol and ozone from CAMS, water vapour from DINI (with CAMS outside the DINI domain), and surface albedo from LSA SAF.
+
+```
+./scripts/mtg.sh --ref-time "2026-08-23 13:00" --zarr-inputs
+```
+
+The archive locations are set with `CAMS_ZARR`, `DINI_ZARR` and `LSASAF_ZARR`; an empty value skips that archive. Anything the archives cannot provide falls back to the climatologies, with a warning. See [the input documentation](docs/inputs.md#inputs-from-zarr-archives) for the details.
+
 ## Further documentation
 
 There exist some notes on various aspects of the program, linked below.

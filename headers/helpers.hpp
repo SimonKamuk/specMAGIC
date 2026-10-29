@@ -16,6 +16,10 @@ inline AlbedoType parseAlbedoSource(){
         return AlbedoType::MODIS;
     }
 
+    if (std::string(env) == "LSASAF") {
+        return AlbedoType::LSASAF;
+    }
+
     throw std::runtime_error(
         "Unknown ALBEDO: " + std::string(env)
     );

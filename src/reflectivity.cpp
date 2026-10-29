@@ -179,7 +179,7 @@ namespace Reflectivity {
     }
 
     MAGIC_REAL getBestKatoSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source, GroundAlbedo& alb,
-       const ModisBrdf::ModisBrdfAlbedo& modis, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction) {
+       const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, int band, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction) {
 
         // This structure should be future proof for other albedo types, but we MUST default to the landmap
         // if smething is wrong. Otherwise big errors
@@ -194,7 +194,12 @@ namespace Reflectivity {
                 result = modis_albedo;
             } 
         
-        } 
+        } else if (alb_source == AlbedoType::LSASAF) {
+
+            // Finished albedos, so no BRDF or zenith correction. -1 where there is no value.
+            result = zarr.getKatoAlbedo(band, a);
+
+        }
 
         // Fall back to the land-use albedo if the landmap was asked for, or if the
         // preferred source did not yield a sensible value. This test must sit outside
@@ -212,7 +217,7 @@ namespace Reflectivity {
     }
 
     MAGIC_REAL getBestSatelliteSurfaceAlbedo(Climate& climatologies, Area a, AlbedoType alb_source, GroundAlbedo& alb,
-        const ModisBrdf::ModisBrdfAlbedo& modis, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction ) {
+        const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, double wavelength_nm, MAGIC_REAL cos_sza, MAGIC_REAL fallback_correction ) {
 
         MAGIC_REAL result = -1;
 
@@ -222,6 +227,10 @@ namespace Reflectivity {
             if (modis_albedo >= (MAGIC_REAL)0 && modis_albedo <= (MAGIC_REAL)1) {
                 result = modis_albedo;
             } 
+
+        } else if (alb_source == AlbedoType::LSASAF) {
+
+            result = zarr.getSatelliteAlbedo(wavelength_nm, a);
 
         }
 
@@ -247,14 +256,14 @@ namespace Reflectivity {
 
 // Big monster func to calculate CAL for this pixel
 MAGIC_REAL effectiveCloudAlbedo(Image& img, SolarParameters sun, Climate& climatologies, AlbedoType alb_source, GroundAlbedo& alb,
-    const ModisBrdf::ModisBrdfAlbedo& modis, Area a, PixelClimate& clim, int line, int col) {
+    const ModisBrdf::ModisBrdfAlbedo& modis, const ZarrInputs::Inputs& zarr, Area a, PixelClimate& clim, int line, int col) {
 
     MAGIC_REAL Rmax = 3500;
 
     // Radiance, scaled by angle
     MAGIC_REAL radi = (static_cast<MAGIC_REAL>(img.im.at(line, col)) - (MAGIC_REAL) DARK_OFFSET) / sun.corrected_cos_sza;
 
-    MAGIC_REAL albedo = Reflectivity::getBestSatelliteSurfaceAlbedo(climatologies, a, alb_source, alb, modis, img.info.wavelength, sun.cos_sza,
+    MAGIC_REAL albedo = Reflectivity::getBestSatelliteSurfaceAlbedo(climatologies, a, alb_source, alb, modis, zarr, img.info.wavelength, sun.cos_sza,
         clim.albedo_correction);
 
     MAGIC_REAL Rmin = 0;

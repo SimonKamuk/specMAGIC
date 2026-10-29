@@ -1,9 +1,11 @@
 # Figs should be regenerated and code recompiled each run
 MTG_handled/*
+zarr_handled/*
 figs/*
 build/*
 
 image_list.txt
+zarr_inputs.txt
 
 # Don't want the output files in the repo
 *.nc
@@ -27,3 +29,6 @@ gif_frames/
 
 # Do not include large downloaded land albedo map files
 climatologies/modis-brdf/*.nc
+
+# Dont include virtual environment
+.venv

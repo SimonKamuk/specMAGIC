@@ -199,6 +199,49 @@ The table is indexed by the clear-sky index `k`, which comes from the satellite-
 index, so this is the one static table whose lookup depends on the image rather than on
 geography.
 
+## Inputs from zarr archives
+
+With `--zarr-inputs`, the driver replaces the climatologies, and the albedo, with fields for
+the time of the satellite image. `py_utils/extract_zarr_inputs.py` reads them from the
+archives, converts and regrids them onto the output grid, and writes one NetCDF file per
+archive and source time into `zarr_handled/`. Their paths are listed in `zarr_inputs.txt`,
+which `magic` reads through the `ZARR_INPUTS` environment variable (`ZarrInputs::Inputs` in
+`headers/zarr_inputs.hpp`).
+
+| Input | Archive and variable | Replaces | Conversion |
+|---|---|---|---|
+| Aerosol | CAMS `aod550` | `macc-ecwmf-clim03-06rich.dat` | none, dimensionless |
+| Ozone | CAMS `gtco3` | `ERAint-o3-clim.asc` | kg m^-2 to DU, dividing by 2.1415e-5 |
+| Water vapour | DINI `wvint`, then CAMS `tcwv` | `h2o_ecmwf.dat` | none, kg m^-2 |
+| Albedo | LSA SAF `AL-VI-DH`, `AL-NI-DH` | land use and `reflec.lut` | none, the 1e-4 scale is applied on reading |
+
+**Time.** For each archive, the nearest time to the image start is used. A later time is only
+used if it is already in the archive, otherwise the latest earlier one is, so 00:50 uses
+01:00 if it exists and 00:00 if not. CAMS and DINI accept up to 3 h before and 30 min after
+the image; for DINI, the most recent run with that valid time is used. LSA SAF is daily: the
+image's own day, else the most recent day up to 10 days before it, with a warning.
+
+**Regridding.** CAMS is interpolated bilinearly from its 0.4 degree global grid, and DINI
+bilinearly in its Lambert projection, so it is only available inside the DINI domain. LSA SAF
+is taken from the nearest pixel of its geostationary grid.
+
+**Albedo.** The black-sky (directional-hemispherical) albedos are used as they are, with no
+BRDF model and no `zenithCorrection`: visible (0.4-0.7 um) for the Kato bands up to band 16
+and for satellite channels below 700 nm, near-infrared (0.7-4.0 um) otherwise. LSA SAF has no
+albedo over water, so sea pixels use the land-use albedo, as on the MODIS path.
+
+**Range.** Unlike the smooth monthly climatologies, these fields do leave the LUT axes: CAMS
+ozone over Europe spans about 197-549 DU against the 210-525 DU of `o3corr-l.lut`, and AOD
+reaches about 4.6 in dust events against the 2.0 of `magic-clear_spectral.lut`. Values from the
+archives are therefore clipped to the axes, whereas the climatologies still throw.
+
+**Fallback.** Nothing here stops a run. An archive that cannot be read, a variable that is
+missing, a time outside the window, or a file on a different output grid is left out with a
+warning, and the climatology is used. Per pixel, any value that is missing (outside the DINI
+domain, off the LSA SAF disc, over water for albedo) falls back the same way. After the run,
+`magic` prints which share of the day pixels came from each source and how many were clipped,
+and writes the same, along with the files used, as global attributes of the output files.
+
 ## Unused files and dead config fields
 
 Present in the repository, referenced by nothing, retained from the legacy DWD code:

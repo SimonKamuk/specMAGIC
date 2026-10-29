@@ -15,6 +15,11 @@ CHANNEL="vis_06"
 DEMO="${DEMO:-0}"              # 1 = use local demo data, 0 = user supplies MTG_RAW_DIR
 MTG_RAW_DIR="${MTG_RAW_DIR:-}"
 ALBEDO="${ALBEDO:-LANDMAP}"
+ZARR="${ZARR:-0}"             # 1 = take aerosol, ozone, water vapour and albedo from the zarr archives
+# Set any of these to an empty string to skip that archive
+CAMS_ZARR="${CAMS_ZARR-/dmidata/projects/energivejr-data/cams/cams.zarr}"
+DINI_ZARR="${DINI_ZARR-/dmidata/projects/energivejr-data/dini/dini.zarr}"
+LSASAF_ZARR="${LSASAF_ZARR-/dmidata/projects/energivejr-data/mtg/lsasaf/lsasaf_data.zarr}"
 EXTENT="40.0 -15.0 65.0 30.0 1.0"
 
 valid_channels=(vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22 ir_38 wv_63 wv_73 ir_87 ir_97 ir_105 ir_123 ir_133)
@@ -25,7 +30,10 @@ usage() {
     echo "Options:"
     echo "  --ref-time TIME       Reference time (not available in demo mode)"
     echo "  --channel CHANNEL     Satellite channel (default: $CHANNEL). Options: vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22 ir_38 wv_63 wv_73 ir_87 ir_97 ir_105 ir_123 ir_133"
-    echo "  --albedo ALBEDO       Albedo type (default: $ALBEDO). Options: LANDMAP MODIS" 
+    echo "  --albedo ALBEDO       Albedo type (default: $ALBEDO). Options: LANDMAP MODIS LSASAF" 
+    echo "  --zarr-inputs         Take aerosol and ozone (CAMS), water vapour (DINI, then CAMS) and albedo"
+    echo "                        (LSA SAF) from the zarr archives, falling back to the climatologies."
+    echo "                        Implies --albedo LSASAF. Archives: CAMS_ZARR, DINI_ZARR, LSASAF_ZARR"
     echo "  --demo                Use demo data (default)"
     echo "  --no-demo             Use user-specified MTG_RAW_DIR instead of demo data"
     echo "  --clean               Delete existing outputs before running"
@@ -69,6 +77,11 @@ while [[ $# -gt 0 ]]; do
         --albedo)
             ALBEDO="$2"
             shift 2
+            ;;
+
+        --zarr-inputs)
+            ZARR=1
+            shift
             ;;
 
         --ref-time)
@@ -130,12 +143,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$ZARR" == "1" && "$ALBEDO" != "LSASAF" ]]; then
+    echo "Using LSA SAF albedo, since --zarr-inputs was given."
+    ALBEDO=LSASAF
+fi
+
 case "$ALBEDO" in
-    LANDMAP|MODIS)
+    LANDMAP|MODIS|LSASAF)
         ;;
     *)
         echo "Error: invalid albedo type '$ALBEDO'."
-        echo "Valid options are: LANDMAP, MODIS."
+        echo "Valid options are: LANDMAP, MODIS, LSASAF."
         exit 1
         ;;
 esac
@@ -191,6 +209,7 @@ fi
 
 ## Output locations
 MTG_READY_DIR="${ROOT}/MTG_handled"
+ZARR_READY_DIR="${ROOT}/zarr_handled"
 FIGS_DIR="${ROOT}/figs"
 OUTPATH="${ROOT}/out"
 
@@ -198,6 +217,7 @@ mkdir -p "$MTG_READY_DIR" "$FIGS_DIR" "$OUTPATH"
 
 if [[ "$NOCLEAN" != "1" ]]; then
     rm -rf "${MTG_READY_DIR:?}"/*
+    rm -rf "${ZARR_READY_DIR:?}"/*
     rm -rf "${FIGS_DIR:?}"/*
     rm -rf "${OUTPATH:?}"/*
 fi
@@ -248,7 +268,22 @@ fi
 
 
 
+## Extract the zarr slices for this image. Failing here is not fatal:
+## magic then uses the climatologies, as it does without --zarr-inputs
+ZARR_INPUTS=""
+if [[ "$ZARR" == "1" ]]; then
+    echo "Extracting zarr inputs..."
+    if uv run python "$ROOT/py_utils/extract_zarr_inputs.py" "$ROOT/image_list.txt" "$ROOT/magic-config.asc" \
+        "$ROOT/satellites/${SATELLITE}.toml" "$ZARR_READY_DIR" "$ROOT/zarr_inputs.txt" \
+        --cams "$CAMS_ZARR" --dini "$DINI_ZARR" --lsasaf "$LSASAF_ZARR"; then
+        ZARR_INPUTS="$ROOT/zarr_inputs.txt"
+    else
+        echo "[WARNING] Could not extract zarr inputs. Using the climatologies." >&2
+    fi
+fi
+
 export OMP_NUM_THREADS=8
+export ZARR_INPUTS
 export ALBEDO=$ALBEDO
 echo "Calling magic..."
 

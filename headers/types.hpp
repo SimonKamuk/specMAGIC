@@ -27,4 +27,4 @@ enum class PixelState { Night = 0, Day = 1, Invalid = 99 };
 enum class IrradianceMode { Beam, Global };
 
 // The source of the albedo data being used
-enum class AlbedoType { LANDMAP, MODIS };
+enum class AlbedoType { LANDMAP, MODIS, LSASAF };
