@@ -17,10 +17,11 @@ MTG_RAW_DIR="${MTG_RAW_DIR:-}"
 ALBEDO="${ALBEDO:-LANDMAP}"
 ZARR_ATMOSPHERE="${ZARR_ATMOSPHERE:-0}"   # 1 = take aerosol, ozone and water vapour from the zarr archives
 STRICT_INPUTS="${STRICT_INPUTS:-0}"       # 1 = stop if a requested zarr input is missing, instead of warning
-# Set any of these to an empty string to skip that archive
-CAMS_ZARR="${CAMS_ZARR-/dmidata/projects/energivejr-data/cams/cams.zarr}"
-DINI_ZARR="${DINI_ZARR-/dmidata/projects/energivejr-data/dini/dini.zarr}"
-LSASAF_ZARR="${LSASAF_ZARR-/dmidata/projects/energivejr-data/mtg/lsasaf/lsasaf_data.zarr}"
+# Paths of the zarr archives. An unset archive is skipped, and what it would provide
+# falls back to the climatologies (or stops the run with --strict-inputs)
+CAMS_ZARR="${CAMS_ZARR:-}"
+DINI_ZARR="${DINI_ZARR:-}"
+LSASAF_ZARR="${LSASAF_ZARR:-}"
 EXTENT="40.0 -15.0 65.0 30.0 1.0"
 
 valid_channels=(vis_04 vis_05 vis_06 vis_08 vis_09 nir_13 nir_16 nir_22 ir_38 wv_63 wv_73 ir_87 ir_97 ir_105 ir_123 ir_133)
@@ -162,7 +163,27 @@ case "$ALBEDO" in
         ;;
 esac
 
-# Check for ref time 
+# The zarr archives that were asked for must have a path
+required_zarr=()
+if [[ "$ZARR_ATMOSPHERE" == "1" ]]; then
+    required_zarr+=(CAMS_ZARR DINI_ZARR)
+fi
+if [[ "$ALBEDO" == "LSASAF" ]]; then
+    required_zarr+=(LSASAF_ZARR)
+fi
+for var in "${required_zarr[@]}"; do
+    if [[ -z "${!var}" ]]; then
+        if [[ "$STRICT_INPUTS" == "1" ]]; then
+            echo "Error: $var is not set, and --strict-inputs was given."
+            echo "Set it with, for example:"
+            echo "  export $var=/path/to/archive.zarr"
+            exit 1
+        fi
+        echo "[WARNING] $var is not set, so that archive is skipped. magic reports what it falls back to." >&2
+    fi
+done
+
+# Check for ref time
 # In demo mode, the time is fixed, so the user should not pass a time
 if [[ "$DEMO" -eq 1 ]]; then
 

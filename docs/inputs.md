@@ -208,7 +208,10 @@ image, read from zarr archives:
 * `--albedo LSASAF` replaces the land-use albedo (and `reflec.lut`) by the LSA SAF albedo.
 
 They are independent, so that their effects can be judged separately, and either can be
-combined with the other albedo options. `py_utils/extract_zarr_inputs.py` reads the archives,
+combined with the other albedo options. The archive paths are taken from the environment
+variables `CAMS_ZARR`, `DINI_ZARR` and `LSASAF_ZARR`; there are no defaults. An archive that
+is requested but not set is skipped with a warning, or stops the run with `--strict-inputs`.
+`py_utils/extract_zarr_inputs.py` reads the archives,
 converts and regrids the fields onto the output grid, and writes one NetCDF file per archive
 and source time into `zarr_handled/`. Their paths are listed in `zarr_inputs.txt`, which
 `magic` reads through the `ZARR_INPUTS` environment variable (`ZarrInputs::Inputs` in
